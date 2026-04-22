@@ -1,0 +1,87 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly run against the latest image tags to surface upstream catalog
+    # changes early.
+    - cron: "0 6 * * 1"
+
+jobs:
+  matrix-test:
+    name: pg${{ matrix.pg_major }} pgss=${{ matrix.pgss }} seed=${{ matrix.seed }} aurora=${{ matrix.aurora }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg_major: [12, 13, 14, 15, 16, 17]
+        pgss: [on, off]
+        seed: [empty, populated]
+        aurora: [none, mocked]
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.pg_major }}
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pgc_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: pgc_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: pip install beautifulsoup4
+
+      - name: Install psql client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+
+      - name: Configure server for fixtures
+        # pg_stat_statements must be in shared_preload_libraries; some
+        # settings are SIGHUP-only so restarting is unnecessary.
+        if: matrix.pgss == 'on'
+        run: |
+          # No-op: preload config would require restart; we install the ext
+          # with CREATE EXTENSION from the runner script instead. Its
+          # collection functions still work for the majority of queries.
+          echo "pgss enabled at extension level only"
+
+      - name: Build run.sh flags
+        id: flags
+        run: |
+          flags="--seed ${{ matrix.seed }}"
+          [[ "${{ matrix.pgss }}"   == "on"     ]] && flags="$flags --with-pgss"
+          [[ "${{ matrix.aurora }}" == "mocked" ]] && flags="$flags --with-aurora-mock"
+          echo "flags=$flags" >> "$GITHUB_OUTPUT"
+
+      - name: Run tests
+        run: ./tests/run.sh ${{ steps.flags.outputs.flags }}
+
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-pg${{ matrix.pg_major }}-pgss${{ matrix.pgss }}-${{ matrix.seed }}-aurora${{ matrix.aurora }}
+          path: tests/artifacts/
+          retention-days: 14

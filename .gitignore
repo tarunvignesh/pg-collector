@@ -1,0 +1,10 @@
+
+img/.DS_Store
+.DS_Store
+
+# Local-only research / notes
+RESEARCH.local.md
+*.local.md
+
+# Test runner artifacts
+tests/artifacts/

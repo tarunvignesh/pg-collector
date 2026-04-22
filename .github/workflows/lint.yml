@@ -1,0 +1,31 @@
+name: lint
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  static-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install parser
+        run: pip install pglast==6.*
+
+      - name: Safety (no write statements)
+        run: python tests/lint/check_safety.py pg_collector.sql
+
+      - name: TOC / anchor parity
+        run: python tests/lint/check_toc.py pg_collector.sql
+
+      - name: Control-flow balance (\if / \endif)
+        run: python tests/lint/check_if_endif.py pg_collector.sql
+
+      - name: Dialect parse (libpg_query)
+        run: python tests/lint/check_dialect.py pg_collector.sql

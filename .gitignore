@@ -8,3 +8,8 @@ RESEARCH.local.md
 
 # Test runner artifacts
 tests/artifacts/
+
+# Python bytecode caches
+__pycache__/
+*.pyc
+.pytest_cache/

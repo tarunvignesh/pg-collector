@@ -5,6 +5,10 @@
 # read-only role pgc_runner, assert the report is well-formed, confirm no
 # user-schema rows changed, upload the report for inspection.
 #
+# BYOD mode (--isolate): use the caller's PG cluster but createdb a fresh
+# temporary database, seed and run inside it, dropdb on exit. Full harness,
+# no container required.
+#
 # BYO-DSN mode: point at any Postgres via PGHOST/PGUSER/etc. and run the
 # structural assertions on whatever the script produces. Skips seeding and
 # the before/after schema diff so we never touch a user database.
@@ -14,6 +18,7 @@
 #   ./tests/run.sh --seed populated --with-pgss --with-aurora-mock
 #   ./tests/run.sh --as-role pgc_runner
 #   PGHOST=... PGUSER=... ./tests/run.sh --skip-seed --skip-diff
+#   PGHOST=... PGUSER=... ./tests/run.sh --isolate --seed populated   # BYOD with temp-DB isolation
 
 set -euo pipefail
 
@@ -24,6 +29,7 @@ WITH_AURORA_MOCK=0
 AS_ROLE=""                # if empty, uses $PGUSER
 SKIP_SEED=0
 SKIP_DIFF=0
+ISOLATE=0
 
 # ---------- arg parsing ----------
 while [[ $# -gt 0 ]]; do
@@ -34,6 +40,7 @@ while [[ $# -gt 0 ]]; do
         --as-role)            AS_ROLE="$2"; shift 2 ;;
         --skip-seed)          SKIP_SEED=1; shift ;;
         --skip-diff)          SKIP_DIFF=1; shift ;;
+        --isolate)            ISOLATE=1; shift ;;
         -h|--help)
             sed -n '2,30p' "$0"
             exit 0
@@ -56,9 +63,29 @@ STAMP="$(date +%Y%m%d_%H%M%S)"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$HERE/artifacts/$STAMP}"
 mkdir -p "$ARTIFACT_DIR"
 
+# ---------- --isolate: create a temp DB, drop on exit ----------
+MAINT_DB="$PGDATABASE"
+if [[ "$ISOLATE" -eq 1 ]]; then
+    if [[ "$SKIP_SEED" -eq 1 ]]; then
+        echo "ERROR: --isolate and --skip-seed are incompatible (temp DB would be empty)." >&2
+        exit 2
+    fi
+    TMP_DB="pgc_test_$$"
+    echo ">>> --isolate: creating temporary database '$TMP_DB' in cluster..."
+    if ! createdb --maintenance-db="$MAINT_DB" "$TMP_DB" 2>"$ARTIFACT_DIR/createdb.err"; then
+        echo "FAIL: createdb $TMP_DB failed." >&2
+        echo "  Does role '$PGUSER' have CREATEDB? Can it connect to '$MAINT_DB'?" >&2
+        sed 's/^/  /' "$ARTIFACT_DIR/createdb.err" >&2 || true
+        exit 1
+    fi
+    export PGDATABASE="$TMP_DB"
+    # shellcheck disable=SC2064
+    trap "echo '>>> --isolate: dropping $TMP_DB...'; dropdb --if-exists --maintenance-db='$MAINT_DB' '$TMP_DB' >/dev/null 2>&1 || true" EXIT INT TERM
+fi
+
 echo ">>> pg_collector test runner"
 echo "    host=$PGHOST port=$PGPORT db=$PGDATABASE user=$PGUSER"
-echo "    seed=$SEED skip_seed=$SKIP_SEED skip_diff=$SKIP_DIFF"
+echo "    seed=$SEED skip_seed=$SKIP_SEED skip_diff=$SKIP_DIFF isolate=$ISOLATE"
 echo "    with_pgss=$WITH_PGSS with_aurora_mock=$WITH_AURORA_MOCK as_role=${AS_ROLE:-<default>}"
 echo "    artifacts=$ARTIFACT_DIR"
 

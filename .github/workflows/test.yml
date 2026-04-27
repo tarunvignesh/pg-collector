@@ -9,14 +9,95 @@ on:
     # changes early.
     - cron: "0 6 * * 1"
 
+# Required for EnricoMi/publish-unit-test-result-action to write a
+# Checks-API entry on the PR. Falls back gracefully on fork PRs.
+permissions:
+  checks: write
+  pull-requests: write
+  contents: read
+
 jobs:
+  # Unified test report: runs the pytest wrapper (4 lint tests + 2 runtime
+  # tests) against postgres:17, publishes JUnit XML to the PR Checks UI,
+  # and uploads the self-contained HTML report as a workflow artifact.
+  # This is the surface PR reviewers see; cross-version coverage is in
+  # `matrix-test` below.
+  report:
+    name: pytest report (pg17)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pgc_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: pgc_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: pip install -r tests/requirements.txt
+
+      - name: Install psql client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+
+      - name: Run pytest
+        run: |
+          mkdir -p tests/artifacts/test-report
+          pytest tests/test_harness.py -v \
+            --html=tests/artifacts/test-report/test_report.html \
+            --self-contained-html \
+            --junitxml=tests/artifacts/test-report/junit.xml
+
+      - name: Publish JUnit results to PR
+        if: always()
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        with:
+          files: tests/artifacts/test-report/junit.xml
+          check_name: pytest results
+          comment_mode: failures
+
+      - name: Upload HTML test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: tests/artifacts/test-report/
+          retention-days: 14
+
   matrix-test:
     name: pg${{ matrix.pg_major }} pgss=${{ matrix.pgss }} seed=${{ matrix.seed }} aurora=${{ matrix.aurora }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        pg_major: [12, 13, 14, 15, 16, 17]
+        # Spans EOL'd majors (12, 13) through latest GA (18). main targets
+        # PG12-and-older per the branching policy; broader coverage here is
+        # intentional regression-detection — failures on newer majors are
+        # early warnings for the per-major branches, not necessarily
+        # merge-blockers on this branch. See tests/DESIGN.md.
+        pg_major: [12, 13, 14, 15, 16, 17, 18]
         pgss: [on, off]
         seed: [empty, populated]
         aurora: [none, mocked]

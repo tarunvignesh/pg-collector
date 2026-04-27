@@ -394,6 +394,27 @@ Report name and location: /tmp/pg_collector_postgres-2024-09-09_161216.html
 
 ```
 
+# Testing
+
+The `tests/` directory contains a lint + runtime harness that asserts the
+script is read-only, structurally valid, and triggers the expected
+observation warnings.
+
+Local run, against your own Postgres (creates and drops a temp database):
+
+```bash
+PGHOST=localhost PGUSER=postgres \
+    ./tests/run.sh --isolate --seed populated --with-pgss --with-aurora-mock
+```
+
+CI runs the same harness in a GitHub Actions matrix (PG12–17 ×
+pgss on/off × seed empty/populated × aurora none/mocked).
+
+- [TESTING.md](TESTING.md) — what each test proves, in plain English.
+- [tests/README.md](tests/README.md) — running locally, flag reference,
+  the read-only-against-real-DB variant.
+- [tests/DESIGN.md](tests/DESIGN.md) — fixture architecture and gotchas.
+
 # License
 
 This library is licensed under the MIT-0 License. See the LICENSE file.

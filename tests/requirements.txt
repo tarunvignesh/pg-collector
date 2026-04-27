@@ -1,0 +1,8 @@
+# Test-suite Python dependencies.
+# Local: pip install -r tests/requirements.txt
+# CI:    same — see .github/workflows/test.yml `report` job.
+
+pytest>=8
+pytest-html>=4
+pglast>=7
+beautifulsoup4>=4

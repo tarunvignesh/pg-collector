@@ -1,12 +1,69 @@
 <!doctype html>
+<!-- ===========================================================================
+     pg_collector enhance.html — modern viewer for pg_collector reports
+     ---------------------------------------------------------------------------
+     Static, browser-only post-processor. Drop a pg_collector_*.html onto this
+     page (or pass ?report=URL) and it renders a modern UI on top of the
+     existing report DOM. Zero changes to pg_collector.sql.
+
+     ┌─ HOW TO CUSTOMIZE ──────────────────────────────────────────────────┐
+     │                                                                     │
+     │   Look & feel  → CSS tokens at the top of <style>                   │
+     │                  (search for "DESIGN TOKENS" — every color, font,   │
+     │                  spacing, shadow lives there).                      │
+     │                                                                     │
+     │   Add a theme  → add a [data-theme=NAME] block in <style>           │
+     │                  (copy [data-theme=light] as a template) AND add a  │
+     │                  matching <button> to the .theme-toggle in the      │
+     │                  sidebar markup.                                    │
+     │                                                                     │
+     │   Severity     → edit RUBRIC[] in <script>                          │
+     │                                                                     │
+     │   Section      → edit SECTION_GROUPS[] in <script>                  │
+     │   grouping       (sections not listed go to "Other" automatically). │
+     │                                                                     │
+     │   Wording      → edit LABELS{} in <script> (titles, button copy,    │
+     │                  footer note, etc.)                                 │
+     │                                                                     │
+     │   Initial      → edit DEFAULTS{} in <script> (which severity blocks │
+     │   state          start expanded, hide empty sections, theme).       │
+     │                                                                     │
+     │   Layout       → search for "// LAYOUT" in <script> and ".app" in   │
+     │                  <style>. Most layout decisions are CSS grid.       │
+     │                                                                     │
+     └─────────────────────────────────────────────────────────────────────┘
+
+     File structure:
+       1. <style>     — CSS, organized as tokens then components
+       2. <body>      — minimal markup (drop zone + app shell containers)
+       3. <script>
+          a. CONFIG   — RUBRIC, SECTION_GROUPS, LABELS, DEFAULTS  ← edit here
+          b. PARSING  — extracts structured data from the report DOM
+          c. RENDER   — builds the modern UI
+
+     See tools/README.md for worked examples of each customization.
+=========================================================================== -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>pg_collector report — modern view</title>
 <style>
-  /* ===== Design tokens ===== */
+  /* ============================================================
+   * DESIGN TOKENS — colors, spacing, shadows
+   * ----------------------------------------------------------
+   * All themable values live here. Each [data-theme=NAME]
+   * block must define the same token set. To add a theme:
+   *
+   *   1. Copy a complete [data-theme=light] (or dark) block
+   *   2. Rename to [data-theme=YOURNAME]
+   *   3. Adjust colors as desired
+   *   4. Add a <button data-theme-set="YOURNAME"> to the
+   *      .theme-toggle in the sidebar markup
+   * ============================================================ */
+
   :root {
+    /* Default: follow OS via prefers-color-scheme below */
     --bg:        #f6f8fa;
     --surface:   #ffffff;
     --surface-2: #f6f8fa;
@@ -14,20 +71,20 @@
     --text:      #1f2328;
     --muted:     #656d76;
     --accent:    #0969da;
-    --crit-bg:   #ffebe9;
-    --crit-fg:   #82071e;
-    --crit-bd:   #ff8182;
-    --warn-bg:   #fff8c5;
-    --warn-fg:   #4d2d00;
-    --warn-bd:   #d4a72c;
-    --note-bg:   #ddf4ff;
-    --note-fg:   #0a3069;
-    --note-bd:   #54aeff;
-    --ok-bg:     #dafbe1;
-    --ok-fg:     #0a3622;
-    --ok-bd:     #4ac26b;
+
+    /* Severity palette — shared semantic colors */
+    --crit-bg: #ffebe9; --crit-fg: #82071e; --crit-bd: #ff8182;
+    --warn-bg: #fff8c5; --warn-fg: #4d2d00; --warn-bd: #d4a72c;
+    --note-bg: #ddf4ff; --note-fg: #0a3069; --note-bd: #54aeff;
+    --ok-bg:   #dafbe1; --ok-fg:   #0a3622; --ok-bd:   #4ac26b;
+
+    /* Effects */
     --shadow:    0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+    --radius:    8px;
+    --radius-sm: 4px;
   }
+
+  /* OS-driven dark mode (when [data-theme] is unset) */
   @media (prefers-color-scheme: dark) {
     :root {
       --bg:        #0d1117;
@@ -37,24 +94,17 @@
       --text:      #e6edf3;
       --muted:     #8d96a0;
       --accent:    #58a6ff;
-      --crit-bg:   #481119;
-      --crit-fg:   #ffabb3;
-      --crit-bd:   #cc4858;
-      --warn-bg:   #3a2c00;
-      --warn-fg:   #f4d35e;
-      --warn-bd:   #9e7400;
-      --note-bg:   #0c2d6b;
-      --note-fg:   #79c0ff;
-      --note-bd:   #1f6feb;
-      --ok-bg:     #033a16;
-      --ok-fg:     #4ac26b;
-      --ok-bd:     #2ea043;
+      --crit-bg: #481119; --crit-fg: #ffabb3; --crit-bd: #cc4858;
+      --warn-bg: #3a2c00; --warn-fg: #f4d35e; --warn-bd: #9e7400;
+      --note-bg: #0c2d6b; --note-fg: #79c0ff; --note-bd: #1f6feb;
+      --ok-bg:   #033a16; --ok-fg:   #4ac26b; --ok-bd:   #2ea043;
       --shadow:    0 1px 3px rgba(0,0,0,.4), 0 1px 2px rgba(0,0,0,.3);
     }
   }
-  [data-theme=light] { color-scheme: light; }
-  [data-theme=dark]  { color-scheme: dark; }
+
+  /* User-selected themes (override OS) */
   [data-theme=light] {
+    color-scheme: light;
     --bg:#f6f8fa;--surface:#fff;--surface-2:#f6f8fa;--border:#d0d7de;
     --text:#1f2328;--muted:#656d76;--accent:#0969da;
     --crit-bg:#ffebe9;--crit-fg:#82071e;--crit-bd:#ff8182;
@@ -64,6 +114,7 @@
     --shadow:0 1px 3px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04);
   }
   [data-theme=dark] {
+    color-scheme: dark;
     --bg:#0d1117;--surface:#161b22;--surface-2:#1e242c;--border:#30363d;
     --text:#e6edf3;--muted:#8d96a0;--accent:#58a6ff;
     --crit-bg:#481119;--crit-fg:#ffabb3;--crit-bd:#cc4858;
@@ -72,62 +123,79 @@
     --ok-bg:#033a16;--ok-fg:#4ac26b;--ok-bd:#2ea043;
     --shadow:0 1px 3px rgba(0,0,0,.4),0 1px 2px rgba(0,0,0,.3);
   }
+  /* TIP: add new themes here — copy a block above and adjust colors. */
 
+  /* ============================================================
+   * BASE TYPOGRAPHY
+   * ============================================================ */
   *,*::before,*::after { box-sizing: border-box; }
   html,body { margin:0; padding:0; }
   body {
-    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                  "Helvetica Neue", Arial, sans-serif;
     color: var(--text); background: var(--bg);
     -webkit-font-smoothing: antialiased;
   }
-  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo,
+                                  Consolas, "Liberation Mono", monospace; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
 
-  /* ===== Drop zone (initial state) ===== */
-  .dropzone {
-    min-height: 100vh; display: grid; place-items: center; padding: 2rem;
-  }
+  /* ============================================================
+   * DROP ZONE (initial state, before a file is loaded)
+   * ============================================================ */
+  .dropzone { min-height: 100vh; display: grid; place-items: center; padding: 2rem; }
   .dropzone .card {
     max-width: 640px; width: 100%; padding: 3rem 2.5rem;
-    background: var(--surface); border: 2px dashed var(--border); border-radius: 12px;
-    text-align: center; transition: all .15s ease;
+    background: var(--surface); border: 2px dashed var(--border);
+    border-radius: 12px; text-align: center; transition: all .15s ease;
   }
   .dropzone.dragover .card { border-color: var(--accent); background: var(--surface-2); }
   .dropzone h1 { font-size: 1.5rem; margin: 0 0 .5rem; }
-  .dropzone p { color: var(--muted); margin: .25rem 0; }
+  .dropzone p  { color: var(--muted); margin: .25rem 0; }
   .dropzone .hint { font-size: .85rem; margin-top: 1.25rem; }
   .dropzone input[type=file] { display: none; }
   .dropzone label.btn {
     display: inline-block; margin-top: 1rem; padding: .55rem 1.25rem;
-    background: var(--accent); color: white; border-radius: 6px; cursor: pointer;
-    font-weight: 500; transition: opacity .15s;
+    background: var(--accent); color: white; border-radius: var(--radius-sm);
+    cursor: pointer; font-weight: 500; transition: opacity .15s;
   }
   .dropzone label.btn:hover { opacity: .9; }
   .err { color: var(--crit-fg); background: var(--crit-bg); padding: .75rem 1rem;
-         border: 1px solid var(--crit-bd); border-radius: 6px; margin-top: 1rem; text-align: left; }
+         border: 1px solid var(--crit-bd); border-radius: var(--radius-sm);
+         margin-top: 1rem; text-align: left; }
 
-  /* ===== App shell ===== */
+  /* ============================================================
+   * APP SHELL — sidebar + main grid
+   * ----------------------------------------------------------
+   * To change the layout (e.g., move sidebar to the right,
+   * change widths, single column always), edit the .app rule.
+   * ============================================================ */
   .app { display: grid; grid-template-columns: 280px minmax(0,1fr); min-height: 100vh; }
-  @media (max-width: 900px) { .app { grid-template-columns: 1fr; } .sidebar { display:none; } }
+  @media (max-width: 900px) {
+    .app { grid-template-columns: 1fr; }
+    .sidebar { display:none; }   /* see TODO: hamburger toggle */
+  }
 
+  /* ============================================================
+   * SIDEBAR
+   * ============================================================ */
   .sidebar {
     background: var(--surface); border-right: 1px solid var(--border);
     padding: 1.25rem 0; position: sticky; top: 0; height: 100vh; overflow-y: auto;
   }
   .sidebar-head { padding: 0 1.25rem 1rem; border-bottom: 1px solid var(--border); }
-  .sidebar-brand {
-    display: flex; align-items: center; gap: .55rem; font-weight: 600; font-size: 1rem;
-  }
+  .sidebar-brand { display: flex; align-items: center; gap: .55rem;
+                   font-weight: 600; font-size: 1rem; }
   .sidebar-brand .logo {
-    width: 22px; height: 22px; border-radius: 4px; background: var(--accent);
+    width: 22px; height: 22px; border-radius: var(--radius-sm); background: var(--accent);
     display: grid; place-items: center; color: white; font-size: 11px; font-weight: 700;
   }
   .sidebar-version { font-size: .75rem; color: var(--muted); margin-top: .15rem; }
   .sidebar-search {
     width: 100%; margin-top: .85rem; padding: .45rem .65rem;
-    border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text);
-    font-size: .85rem;
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    background: var(--bg); color: var(--text); font-size: .85rem;
   }
   .sidebar-search:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 
@@ -141,23 +209,30 @@
     border-left: 3px solid transparent;
   }
   .sidebar nav a:hover { background: var(--surface-2); text-decoration: none; }
-  .sidebar nav a.active { color: var(--accent); border-left-color: var(--accent); background: var(--surface-2); }
+  .sidebar nav a.active { color: var(--accent); border-left-color: var(--accent);
+                          background: var(--surface-2); }
   .sidebar nav a.hidden { display: none; }
+  .sidebar nav a .nav-stamp {
+    margin-left: .5rem; font-size: .65rem; padding: 0 .35rem; border-radius: 8px;
+    background: var(--warn-bd); color: white; font-weight: 600;
+  }
+  .sidebar nav a .nav-stamp.crit { background: var(--crit-bd); }
 
   .sidebar-foot {
     margin-top: 1rem; padding: 1rem 1.25rem; border-top: 1px solid var(--border);
     font-size: .75rem; color: var(--muted);
   }
-  .theme-toggle {
-    display: flex; gap: .25rem; margin-bottom: .5rem;
-  }
+  .theme-toggle { display: flex; gap: .25rem; margin-bottom: .5rem; }
   .theme-toggle button {
     flex: 1; padding: .3rem .5rem; font-size: .75rem; cursor: pointer;
-    background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text);
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); color: var(--text);
   }
   .theme-toggle button.active { background: var(--accent); color: white; border-color: var(--accent); }
 
-  /* ===== Main content ===== */
+  /* ============================================================
+   * MAIN content area
+   * ============================================================ */
   .main { padding: 1.5rem 2rem 4rem; max-width: 1120px; }
   @media (max-width: 600px) { .main { padding: 1rem; } }
 
@@ -180,8 +255,8 @@
     gap: .75rem; margin-bottom: 1.5rem;
   }
   .hero-card {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-    padding: 1rem 1.25rem; box-shadow: var(--shadow);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1rem 1.25rem; box-shadow: var(--shadow);
   }
   .hero-card.crit { border-left: 4px solid var(--crit-bd); }
   .hero-card.warn { border-left: 4px solid var(--warn-bd); }
@@ -194,9 +269,11 @@
   .hero-num.ok   { color: var(--ok-fg); }
   .hero-label { font-size: .85rem; color: var(--muted); margin-top: .15rem; }
 
-  /* Severity blocks */
-  .sev-block { margin-bottom: 1.5rem; border-radius: 8px; overflow: hidden;
-               border: 1px solid var(--border); background: var(--surface); box-shadow: var(--shadow); }
+  /* Severity blocks (grouped findings) */
+  .sev-block {
+    margin-bottom: 1.5rem; border-radius: var(--radius); overflow: hidden;
+    border: 1px solid var(--border); background: var(--surface); box-shadow: var(--shadow);
+  }
   .sev-block.crit { border-color: var(--crit-bd); }
   .sev-block.warn { border-color: var(--warn-bd); }
   .sev-block.note { border-color: var(--note-bd); }
@@ -207,11 +284,9 @@
   .sev-block.crit .sev-head { background: var(--crit-bg); color: var(--crit-fg); }
   .sev-block.warn .sev-head { background: var(--warn-bg); color: var(--warn-fg); }
   .sev-block.note .sev-head { background: var(--note-bg); color: var(--note-fg); }
-  .sev-head .icon { font-size: 1.1rem; }
-  .sev-head .count {
-    margin-left: auto; font-size: .8rem; opacity: .7;
-  }
-  .sev-head .chev { transition: transform .15s; }
+  .sev-head .icon  { font-size: 1.1rem; }
+  .sev-head .count { margin-left: auto; font-size: .8rem; opacity: .7; }
+  .sev-head .chev  { transition: transform .15s; }
   .sev-block.collapsed .sev-head .chev { transform: rotate(-90deg); }
   .sev-block.collapsed .sev-body { display: none; }
   .sev-body { padding: .25rem 0; }
@@ -222,15 +297,15 @@
   .obs:first-child { border-top: none; }
   .obs .badge {
     display: inline-flex; align-items: center; gap: .35rem; padding: .15rem .5rem;
-    border-radius: 4px; font-size: .7rem; font-weight: 600; text-transform: uppercase;
-    letter-spacing: .03em; cursor: help;
+    border-radius: var(--radius-sm); font-size: .7rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .03em; cursor: help;
   }
   .obs.crit .badge { background: var(--crit-bd); color: white; }
   .obs.warn .badge { background: var(--warn-bd); color: white; }
   .obs.note .badge { background: var(--note-bd); color: white; }
   .obs .text { color: var(--text); }
   .obs .text a { color: var(--accent); }
-  .obs .why { font-size: .75rem; color: var(--muted); }
+  .obs .why  { font-size: .75rem; color: var(--muted); }
   .obs .goto { font-size: .8rem; }
 
   /* DB overview cards */
@@ -239,8 +314,8 @@
     gap: .75rem; margin-bottom: 2rem;
   }
   .db-card {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-    padding: .85rem 1rem;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: .85rem 1rem;
   }
   .db-card .lbl { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em;
                   color: var(--muted); font-weight: 600; }
@@ -248,29 +323,32 @@
 
   /* Section blocks (the original content, restyled) */
   .section {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-    margin-bottom: 1rem; overflow: hidden;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); margin-bottom: 1rem; overflow: hidden;
   }
   .section > summary {
     list-style: none; padding: .85rem 1.25rem; cursor: pointer; user-select: none;
     display: flex; align-items: center; gap: .65rem; font-weight: 600;
   }
   .section > summary::-webkit-details-marker { display: none; }
-  .section > summary .chev { color: var(--muted); transition: transform .15s; font-size: .85rem; }
+  .section > summary .chev { color: var(--muted); transition: transform .15s;
+                             font-size: .85rem; }
   .section[open] > summary .chev { transform: rotate(90deg); }
   .section > summary .name { flex: 1; }
   .section > summary .stamp {
-    font-size: .7rem; padding: .15rem .5rem; border-radius: 4px;
+    font-size: .7rem; padding: .15rem .5rem; border-radius: var(--radius-sm);
     background: var(--surface-2); color: var(--muted); border: 1px solid var(--border);
   }
-  .section > summary .stamp.has-issue { background: var(--warn-bg); color: var(--warn-fg); border-color: var(--warn-bd); }
-  .section > summary .stamp.has-crit  { background: var(--crit-bg); color: var(--crit-fg); border-color: var(--crit-bd); }
-  .section-body { padding: 0 1.25rem 1.25rem; }
+  .section > summary .stamp.has-issue { background: var(--warn-bg); color: var(--warn-fg);
+                                        border-color: var(--warn-bd); }
+  .section > summary .stamp.has-crit  { background: var(--crit-bg); color: var(--crit-fg);
+                                        border-color: var(--crit-bd); }
+  .section-body { padding: 0 1.25rem 1.25rem; overflow-x: auto; }
 
-  /* Restyled tables (from psql's <table border="1">) */
+  /* Restyle psql tables (<table border="1">) */
   .section-body table {
     border-collapse: collapse; margin: .75rem 0; font-size: .85rem;
-    border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+    border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden;
     width: 100%; max-width: 100%;
   }
   .section-body table th {
@@ -284,7 +362,6 @@
   }
   .section-body table tr:last-child td { border-bottom: none; }
   .section-body table tr:nth-child(even) td { background: var(--surface-2); }
-  .section-body { overflow-x: auto; }
 
   .section-body h2, .section-body h3, .section-body h4 {
     color: var(--text); margin: 1.25rem 0 .35rem; font-size: 1rem;
@@ -292,7 +369,7 @@
   .section-body h4 { font-size: .9rem; color: var(--muted); font-weight: 500; }
   .section-body hr { display: none; }
   .section-body br { display: none; }
-  .section-body p { margin: .5rem 0; }
+  .section-body p  { margin: .5rem 0; }
 
   /* Severity rubric modal */
   .modal-bg {
@@ -302,16 +379,19 @@
   .modal-bg.open { display: flex; }
   .modal {
     background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-    max-width: 720px; width: 92%; max-height: 80vh; overflow-y: auto; padding: 1.5rem 1.75rem;
-    box-shadow: 0 20px 60px rgba(0,0,0,.3);
+    max-width: 720px; width: 92%; max-height: 80vh; overflow-y: auto;
+    padding: 1.5rem 1.75rem; box-shadow: 0 20px 60px rgba(0,0,0,.3);
   }
   .modal h2 { margin: 0 0 .5rem; font-size: 1.1rem; }
-  .modal table { width: 100%; border-collapse: collapse; font-size: .85rem; margin-top: .75rem; }
-  .modal th, .modal td { padding: .5rem .75rem; border-bottom: 1px solid var(--border); text-align: left; }
+  .modal table { width: 100%; border-collapse: collapse; font-size: .85rem;
+                 margin-top: .75rem; }
+  .modal th, .modal td { padding: .5rem .75rem; border-bottom: 1px solid var(--border);
+                         text-align: left; }
   .modal th { color: var(--muted); font-weight: 600; }
   .modal .close {
-    float: right; padding: .25rem .65rem; cursor: pointer; border: 1px solid var(--border);
-    background: var(--surface-2); border-radius: 4px; color: var(--text); font-size: .85rem;
+    float: right; padding: .25rem .65rem; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface-2);
+    border-radius: var(--radius-sm); color: var(--text); font-size: .85rem;
   }
 
   .footer {
@@ -320,22 +400,21 @@
   }
   .footer a { color: var(--accent); }
 
-  /* Small utility classes */
-  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  /* Utilities */
   .hidden { display: none !important; }
 </style>
 </head>
 <body data-theme="">
 
-<!-- Initial: drop zone -->
+<!-- Initial state: drop zone ----------------------------------------- -->
 <div class="dropzone" id="dropzone">
   <div class="card">
-    <h1>pg_collector — modern view</h1>
-    <p>Drop a <code>pg_collector_*.html</code> file here</p>
+    <h1 id="dz-title">pg_collector — modern view</h1>
+    <p id="dz-blurb">Drop a <code>pg_collector_*.html</code> file here</p>
     <p class="mono" style="font-size:.8rem">— or —</p>
     <input type="file" id="filepick" accept=".html,text/html">
-    <label for="filepick" class="btn">Choose file</label>
-    <p class="hint">
+    <label for="filepick" class="btn" id="dz-btn">Choose file</label>
+    <p class="hint" id="dz-hint">
       Reads the report locally in your browser. Nothing is uploaded.<br>
       Original report is not modified.
     </p>
@@ -343,24 +422,24 @@
   </div>
 </div>
 
-<!-- Rendered: app shell -->
+<!-- Loaded state: app shell ----------------------------------------- -->
 <div class="app hidden" id="app">
   <aside class="sidebar">
     <div class="sidebar-head">
       <div class="sidebar-brand">
         <span class="logo">pg</span>
-        <span>pg_collector</span>
+        <span id="sb-app-name">pg_collector</span>
       </div>
       <div class="sidebar-version" id="sb-version">…</div>
       <input type="search" class="sidebar-search" id="search" placeholder="Filter sections…">
     </div>
-    <div class="sidebar-section">Sections</div>
     <nav id="sidebar-nav"></nav>
     <div class="sidebar-foot">
       <div class="theme-toggle" id="themetoggle">
-        <button data-theme-set="auto"  class="active">Auto</button>
+        <button data-theme-set="auto">Auto</button>
         <button data-theme-set="light">Light</button>
         <button data-theme-set="dark">Dark</button>
+        <!-- TIP: add <button data-theme-set="YOURNAME"> to register a new theme -->
       </div>
       <div><a href="#" id="show-rubric">Why these severities?</a></div>
       <div><a href="https://github.com/awslabs/pg-collector" target="_blank">pg-collector ↗</a></div>
@@ -380,31 +459,24 @@
     <section id="findings"></section>
 
     <section>
-      <h2 style="font-size:1rem;margin:1.5rem 0 .5rem">Database overview</h2>
+      <h2 id="db-overview-heading" style="font-size:1rem;margin:1.5rem 0 .5rem">Database overview</h2>
       <div id="db-grid" class="db-grid"></div>
     </section>
 
-    <section id="sections"></section>
+    <section>
+      <h2 id="sections-heading" style="font-size:1rem;margin:1.5rem 0 .5rem">Detail sections</h2>
+      <div id="sections"></div>
+    </section>
 
-    <div class="footer">
-      Disagree with how a check was classified?
-      Open an issue at
-      <a href="https://github.com/awslabs/pg-collector/issues" target="_blank">awslabs/pg-collector</a>
-      or fork and edit the rubric in <code>tools/enhance.html</code>.
-    </div>
+    <div class="footer" id="footer"></div>
   </main>
 </div>
 
-<!-- Severity rubric modal -->
 <div class="modal-bg" id="rubric-modal">
   <div class="modal">
     <button class="close" id="rubric-close">close</button>
-    <h2>Severity rubric</h2>
-    <p style="font-size:.9rem;color:var(--muted)">
-      Severities are an opinion of this viewer, not the original script.
-      They're meant to nudge attention; you should overrule them based
-      on your own context and risk tolerance.
-    </p>
+    <h2 id="rubric-title">Severity rubric</h2>
+    <p id="rubric-blurb" style="font-size:.9rem;color:var(--muted)"></p>
     <table id="rubric-table"></table>
   </div>
 </div>
@@ -412,21 +484,35 @@
 <script>
 'use strict';
 
-/* ============================================================
- *  Severity rubric
- *  --------------------------------------------------------- *
- *  Ordered list of patterns. The first matching pattern wins.
- *  Pattern is matched (case-insensitive) against observation
- *  text. Default if nothing matches: "note".
- * ============================================================ */
+/* ###########################################################
+ * #                                                         #
+ * #             1. CONFIG  ←  edit this section             #
+ * #                                                         #
+ * ########################################################### */
+
+/* -----------------------------------------------------------------
+ * RUBRIC — severity classification
+ * -----------------------------------------------------------------
+ * First matching pattern wins. Default for unmatched: 'note'.
+ *
+ * Each entry:
+ *   sev:   'crit' | 'warn' | 'note'
+ *   re:    RegExp tested against the observation text (case-insens)
+ *   label: short human label shown in findings
+ *   why:   one-line rationale shown as tooltip + in rubric modal
+ *
+ * To add a check, append an object. To downgrade an existing
+ * classification, change its `sev`. Order matters when patterns
+ * could overlap.
+ * ----------------------------------------------------------------- */
 const RUBRIC = [
-  // CRITICAL: data integrity, security, wraparound
+  // CRITICAL — data integrity / security / wraparound
   { sev: 'crit', re: /without\s*ssl/i,
     label: 'Connections without SSL',
     why: 'Unencrypted client connections expose credentials and traffic.' },
   { sev: 'crit', re: /invalid\s+(indexes|index)/i,
     label: 'Invalid indexes',
-    why: 'Index marked invalid takes space, isn\'t used by queries; needs REINDEX or drop.' },
+    why: 'Index marked invalid takes space, isn\'t used; needs REINDEX or drop.' },
   { sev: 'crit', re: /invalid\s+database/i,
     label: 'Invalid databases',
     why: 'Database in a state that prevents normal operation.' },
@@ -437,7 +523,7 @@ const RUBRIC = [
     label: 'Logical replication spill files',
     why: 'Decoded WAL spilling to disk — replication lag and disk-pressure risk.' },
 
-  // WARNING: operational degradation, near-immediate impact
+  // WARNING — operational degradation, near-immediate impact
   { sev: 'warn', re: /20\s*%\s*dead\s+rows|tables\s+that\s+have\s+more\s+than\s+20/i,
     label: 'Tables >20% dead rows',
     why: 'Vacuum is falling behind; bloat impacts read latency and disk usage.' },
@@ -460,7 +546,7 @@ const RUBRIC = [
     label: 'Orphaned prepared transactions',
     why: 'Prepared txn held > threshold; pins resources, blocks vacuum.' },
 
-  // NOTICE: configuration choices, perf hints
+  // NOTICE — configuration choices, perf hints
   { sev: 'note', re: /duplicate\s+indexes/i,
     label: 'Duplicate indexes',
     why: 'Wastes disk and slows writes; usually safe to drop one.' },
@@ -487,47 +573,126 @@ const RUBRIC = [
     why: 'Newer extension version available; review changelog before upgrading.' },
 ];
 
-/* ============================================================
- *  Parser — extracts structured data from the original report.
- * ============================================================ */
+/* -----------------------------------------------------------------
+ * SECTION_GROUPS — categorize sections in the sidebar
+ * -----------------------------------------------------------------
+ * Sidebar entries are grouped under named headings. Sections not
+ * listed in any group fall through to the "Other" group (rendered
+ * automatically). Within a group, sections appear in this order.
+ *
+ * Section IDs are the anchor names used by pg_collector.sql
+ * (e.g. <a name="Database_size"></a>). To find new ones, run
+ * the script and view source.
+ *
+ * To remove grouping entirely (flat list), set this to [].
+ * ----------------------------------------------------------------- */
+const SECTION_GROUPS = [
+  { label: 'Storage', sections: [
+      'Database_size', 'Table_Size', 'index_Size', 'Tablespaces_Info',
+      'Toast_Tables_Mapping', 'Temp_tables', 'Large_objects',
+      'unlogged_tables', 'Partition_tables',
+  ]},
+  { label: 'Performance', sections: [
+      'pg_stat_statements_extension', 'table_Access_Profile',
+      'Index_Access_Profile', 'Unused Indexes', 'DB_Load',
+      'functions_statistics', 'Memory_setting',
+  ]},
+  { label: 'Vacuum & wraparound', sections: [
+      'vacuum_Statistics', 'Fragmentation',
+      'Transaction_ID_TXID', 'Multixact_ID_MXID',
+  ]},
+  { label: 'Replication & sessions', sections: [
+      'Replication', 'sessions_info', 'background_processes',
+  ]},
+  { label: 'Schema', sections: [
+      'Schema_Info', 'public_Schema', 'invalid_indexes',
+      'Duplicate_indexes', 'FK_without_index',
+      'PK_FK_using_numeric_or_integer_data_type',
+      'sequences', 'triggers',
+  ]},
+  { label: 'Security & access', sections: [
+      'Users_Roles_Info', 'access_privileges', 'default_access_privileges',
+      'ssl', 'pg_hba.conf', 'Orphaned_prepared_transactions',
+  ]},
+  { label: 'Configuration', sections: [
+      'DB_parameters', 'Extensions', 'pg_config',
+      'pgaudit_extension', 'pg_shdepend', 'Invalid_databases',
+  ]},
+  { label: 'Aurora', sections: [
+      'Aurora_reader_instances-Replica_Lag',
+      'Aurora_cluster_cache_management_(CCM)',
+      'Aurora_global_db_status', 'Aurora_wait_event_stat',
+      'query_plan_management', 'Aurora_dml_activity',
+      'process_memory_context_usage',
+      'logical_replication_write_through_cache',
+  ]},
+];
+
+/* -----------------------------------------------------------------
+ * LABELS — text strings shown in the UI
+ * -----------------------------------------------------------------
+ * Edit any of these to change wording. For i18n, swap the whole
+ * object based on a locale.
+ * ----------------------------------------------------------------- */
+const LABELS = {
+  appName: 'pg_collector',
+  dropzoneTitle: 'pg_collector — modern view',
+  dropzoneBlurb: 'Drop a <code>pg_collector_*.html</code> file here',
+  dropzoneBtn: 'Choose file',
+  dropzoneHint: 'Reads the report locally in your browser. Nothing is uploaded.<br>Original report is not modified.',
+  searchPlaceholder: 'Filter sections…',
+  databaseOverview: 'Database overview',
+  detailSections: 'Detail sections',
+  heroCritical: 'Critical',
+  heroWarnings: 'Warnings',
+  heroNotices: 'Notices',
+  heroSections: 'Sections with content',
+  noIssues: 'No issues flagged',
+  whyRubric: 'Why these severities?',
+  rubricTitle: 'Severity rubric',
+  rubricBlurb: 'Severities are an opinion of this viewer, not the original script. They\'re meant to nudge attention; you should overrule them based on your own context and risk tolerance.',
+  uncategorized: 'Other',
+  footer: 'Disagree with how a check was classified? Open an issue at <a href="https://github.com/awslabs/pg-collector/issues" target="_blank">awslabs/pg-collector</a> or fork and edit the rubric in <code>tools/enhance.html</code>.',
+};
+
+/* -----------------------------------------------------------------
+ * DEFAULTS — initial UI state
+ * ----------------------------------------------------------------- */
+const DEFAULTS = {
+  // Severity blocks expanded on initial render
+  expandedBlocks: ['crit', 'warn'],
+  // Hide sections whose only content is "no X found" placeholder text
+  hideEmptySections: true,
+  // Initial theme: 'auto' | 'light' | 'dark' | (any custom theme name)
+  initialTheme: 'auto',
+};
+
+/* ###########################################################
+ * #                                                         #
+ * #               2. PARSING  (rarely edited)               #
+ * #                                                         #
+ * ########################################################### */
+
 function parseReport(html) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
-  // Title (e.g. "PG COLLECTOR V3.2")
   const titleEl = doc.querySelector('h1');
   const title = titleEl ? titleEl.textContent.trim() : 'PG Collector';
-
-  // DB info: walk the body before the first navigation table
-  const bodyText = doc.body.innerHTML;
   const dbInfo = extractDbInfo(doc);
-
-  // Observations: lines starting with → (or its escaped form) before the first <a name="...">
   const observations = extractObservations(doc);
-
-  // Sections: each <a name="X"></a> defines a section; content runs to the next anchor.
   const sections = extractSections(doc);
-
   return { title, dbInfo, observations, sections };
 }
 
 function extractDbInfo(doc) {
-  // The report emits a flat sequence: PG host line, server-version line, role line,
-  // a small <table> with Date/UpTime/etc., then a verbose \l+ table.
-  // We pull the simple lines + the small table's first data row.
   const info = {};
-  // Walk text nodes in order, picking the labelled lines.
   const allText = doc.body.innerText || '';
   const hostMatch = allText.match(/PG Host Name\s*\/?\s*PG RDS ENDPOINT:\s*(\S+)/i);
   if (hostMatch) info.host = hostMatch[1];
-
-  // Server line: look for "Aurora-...", "RDS-...", or "pg-..." pattern as a standalone line
   const serverMatch = allText.match(/^(Aurora-[\d.]+[^\n]*|RDS-[\d.]+[^\n]*|pg-[\d.]+[^\n]*)$/m);
   if (serverMatch) info.server = serverMatch[1].trim();
-
-  // Role: "Primary/writer DB (Read write)" or "Standby/Reader DB (Read Only)"
   if (/Primary\/writer\s*DB/i.test(allText)) info.mode = 'Primary (read/write)';
   else if (/Standby\/Reader\s*DB/i.test(allText)) info.mode = 'Standby (read-only)';
 
-  // First small table: Date | DB_START_DATE | UP_TIME | DB_connected | user_name | DB_PORT | DB_Version | block_size
   const firstTable = doc.querySelector('table');
   if (firstTable) {
     const headers = [...firstTable.querySelectorAll('th')].map(t => t.textContent.trim());
@@ -536,50 +701,34 @@ function extractDbInfo(doc) {
     );
     headers.forEach((h, i) => { if (cells[i]) info[h.toLowerCase()] = cells[i]; });
   }
-
   return info;
 }
 
 function extractObservations(doc) {
-  // Find the Observations section header. Observations are the immediately
-  // following text/anchor content until the next <a name=...>.
   const fonts = [...doc.querySelectorAll('font')];
   const obsHeader = fonts.find(f => /^observations\s*$/i.test(f.textContent.trim()));
-  if (!obsHeader) return [];
-
   const obs = [];
-  let node = obsHeader.parentNode.nextSibling;
-  // Walk forward until we hit the next anchored section
-  while (node) {
-    if (node.nodeType === Node.ELEMENT_NODE) {
-      if (node.tagName === 'A' && node.getAttribute('name')) break;
-      // The observations might be inside an enclosing wrapper (e.g. <h4>);
-      // we scan the text content for arrow lines.
-      const txt = (node.textContent || '').trim();
-      if (txt.startsWith('→') || txt.startsWith('→')) {
-        const linkEl = node.querySelector ? node.querySelector('a[href^="#"]') : null;
-        obs.push({
-          text: txt,
-          link: linkEl ? linkEl.getAttribute('href') : null,
-          linkLabel: linkEl ? linkEl.textContent : null,
-          html: node.outerHTML,
-        });
+  if (obsHeader) {
+    let node = obsHeader.parentNode.nextSibling;
+    while (node) {
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        if (node.tagName === 'A' && node.getAttribute('name')) break;
+        const txt = (node.textContent || '').trim();
+        if (txt.startsWith('→') || txt.startsWith('→')) {
+          const linkEl = node.querySelector ? node.querySelector('a[href^="#"]') : null;
+          obs.push({
+            text: txt,
+            link: linkEl ? linkEl.getAttribute('href') : null,
+            linkLabel: linkEl ? linkEl.textContent : null,
+          });
+        }
       }
-    } else if (node.nodeType === Node.TEXT_NODE) {
-      const txt = node.nodeValue || '';
-      if (txt.includes('→') || txt.includes('→')) {
-        // Plain text observation (rare; the script usually renders these inline before <br>)
-        const lines = txt.split(/\n/).map(s => s.trim()).filter(s => s.startsWith('→') || s.startsWith('→'));
-        for (const line of lines) obs.push({ text: line, link: null, linkLabel: null, html: line });
-      }
+      node = node.nextSibling;
     }
-    node = node.nextSibling;
   }
-
-  // Fallback: if walker found nothing, scan body text directly.
+  // Fallback: scan body HTML for arrow-prefixed observation patterns
   if (obs.length === 0) {
     const bodyHtml = doc.body.innerHTML;
-    // Match: → ... <a class="link" href="#X">Y</a> .
     const rx = /→\s*([^<]+?)\s*<a[^>]+href="(#[^"]+)"[^>]*>([^<]+)<\/a>\s*\./g;
     let m;
     while ((m = rx.exec(bodyHtml))) {
@@ -587,34 +736,28 @@ function extractObservations(doc) {
         text: `→ ${m[1].trim()} ${m[3]} .`,
         link: m[2],
         linkLabel: m[3],
-        html: m[0],
       });
     }
   }
-
   return obs;
 }
 
 function extractSections(doc) {
-  // A section starts at <a name="X"></a> and runs until the next <a name=...>.
   const anchors = [...doc.querySelectorAll('a[name]')]
     .filter(a => a.getAttribute('name') && a.getAttribute('name') !== 'top');
   const sections = [];
   for (let i = 0; i < anchors.length; i++) {
     const a = anchors[i];
     const next = anchors[i + 1] || null;
-    // Title: the <font ...><b>X</b></font> right after the anchor
     let titleEl = a.nextElementSibling;
     while (titleEl && titleEl.tagName !== 'FONT') titleEl = titleEl.nextElementSibling;
     const title = titleEl ? titleEl.textContent.trim() : a.getAttribute('name');
 
-    // Body: clone all nodes between this anchor and the next, skipping the title font/hr.
     const wrap = document.createElement('div');
     let n = a.nextSibling;
     let pastTitle = false;
     while (n && n !== next) {
       const clone = n.cloneNode(true);
-      // Skip the first <font><b>title</b></font><hr> chunk
       if (!pastTitle && clone.nodeType === Node.ELEMENT_NODE) {
         if (clone.tagName === 'FONT' && /size="\+2"/.test(clone.outerHTML || '')) {
           n = n.nextSibling; pastTitle = true; continue;
@@ -626,18 +769,12 @@ function extractSections(doc) {
       wrap.appendChild(clone);
       n = n.nextSibling;
     }
-    const html = wrap.innerHTML.trim();
-    const text = wrap.innerText || '';
-
-    // Heuristic: section is "empty" if its rendered text is just placeholder phrases.
-    const empty = isEmptySection(text);
-
     sections.push({
       anchor: a.getAttribute('name'),
       title,
-      html,
-      text,
-      empty,
+      html: wrap.innerHTML.trim(),
+      text: wrap.innerText || '',
+      empty: isEmptySection(wrap.innerText || ''),
     });
   }
   return sections;
@@ -651,25 +788,49 @@ function isEmptySection(text) {
   return false;
 }
 
-/* ============================================================
- *  Severity classifier
- * ============================================================ */
 function classify(text) {
-  for (const r of RUBRIC) {
-    if (r.re.test(text)) return r;
-  }
+  for (const r of RUBRIC) if (r.re.test(text)) return r;
   return { sev: 'note', label: 'Other', why: 'Not in the built-in rubric — defaulting to notice.' };
 }
 
-/* ============================================================
- *  Renderer
- * ============================================================ */
-function render(parsed) {
-  // Title
-  document.getElementById('title').textContent = parsed.title;
-  document.getElementById('sb-version').textContent = parsed.title.replace(/^PG\s*COLLECTOR\s*/i, '');
+/* ###########################################################
+ * #                                                         #
+ * #            3. RENDER — builds the modern UI             #
+ * #                                                         #
+ * ########################################################### */
 
-  // Pills
+// LAYOUT — apply LABELS to static markup before render
+function applyLabels() {
+  document.getElementById('dz-title').textContent = LABELS.dropzoneTitle;
+  document.getElementById('dz-blurb').innerHTML = LABELS.dropzoneBlurb;
+  document.getElementById('dz-btn').textContent = LABELS.dropzoneBtn;
+  document.getElementById('dz-hint').innerHTML = LABELS.dropzoneHint;
+  document.getElementById('sb-app-name').textContent = LABELS.appName;
+  document.getElementById('search').placeholder = LABELS.searchPlaceholder;
+  document.getElementById('db-overview-heading').textContent = LABELS.databaseOverview;
+  document.getElementById('sections-heading').textContent = LABELS.detailSections;
+  document.getElementById('show-rubric').textContent = LABELS.whyRubric;
+  document.getElementById('rubric-title').textContent = LABELS.rubricTitle;
+  document.getElementById('rubric-blurb').textContent = LABELS.rubricBlurb;
+  document.getElementById('footer').innerHTML = LABELS.footer;
+}
+
+function applyInitialTheme() {
+  if (DEFAULTS.initialTheme && DEFAULTS.initialTheme !== 'auto') {
+    document.body.dataset.theme = DEFAULTS.initialTheme;
+  }
+  // Mark the matching toggle button active
+  for (const b of document.getElementById('themetoggle').children) {
+    b.classList.toggle('active', b.dataset.themeSet === DEFAULTS.initialTheme);
+  }
+}
+
+function render(parsed) {
+  document.getElementById('title').textContent = parsed.title;
+  document.getElementById('sb-version').textContent =
+      parsed.title.replace(/^PG\s*COLLECTOR\s*/i, '');
+
+  // Top-bar pills
   const ps = document.getElementById('pill-server');
   const pm = document.getElementById('pill-mode');
   const ph = document.getElementById('pill-host');
@@ -679,21 +840,24 @@ function render(parsed) {
   if (parsed.dbInfo.host)   ph.textContent = parsed.dbInfo.host;
   for (const el of [ps, pm, ph]) if (!el.textContent && !el.innerHTML) el.classList.add('hidden');
 
-  // Classify observations
+  // Classify and bucket observations
   const classified = parsed.observations.map(o => ({ ...o, ...classify(o.text) }));
   const counts = { crit: 0, warn: 0, note: 0 };
   for (const c of classified) counts[c.sev]++;
 
-  // Hero cards
-  const okCount = parsed.sections.filter(s => !s.empty).length - classified.length;
+  // Hero
+  const visibleSections = parsed.sections.filter(s =>
+      !DEFAULTS.hideEmptySections || !s.empty);
   const heroEl = document.getElementById('hero');
   heroEl.innerHTML = '';
-  heroEl.appendChild(heroCard('crit', counts.crit, 'Critical'));
-  heroEl.appendChild(heroCard('warn', counts.warn, 'Warnings'));
-  heroEl.appendChild(heroCard('note', counts.note, 'Notices'));
-  heroEl.appendChild(heroCard('ok', Math.max(0, okCount), 'Sections with content'));
+  heroEl.appendChild(heroCard('crit', counts.crit, LABELS.heroCritical));
+  heroEl.appendChild(heroCard('warn', counts.warn, LABELS.heroWarnings));
+  heroEl.appendChild(heroCard('note', counts.note, LABELS.heroNotices));
+  heroEl.appendChild(heroCard('ok',
+      Math.max(0, visibleSections.length - classified.length),
+      LABELS.heroSections));
 
-  // Findings — three severity blocks (only render if non-empty)
+  // Findings — severity-grouped
   const findingsEl = document.getElementById('findings');
   findingsEl.innerHTML = '';
   for (const sev of ['crit', 'warn', 'note']) {
@@ -706,26 +870,26 @@ function render(parsed) {
     ok.className = 'sev-block';
     ok.style.borderColor = 'var(--ok-bd)';
     ok.innerHTML = `<div class="sev-head" style="background:var(--ok-bg);color:var(--ok-fg)">
-      <span class="icon">✓</span><span>No issues flagged</span></div>`;
+      <span class="icon">✓</span><span>${escapeHtml(LABELS.noIssues)}</span></div>`;
     findingsEl.appendChild(ok);
   }
 
-  // DB overview cards
+  // DB overview
+  const dbi = parsed.dbInfo;
+  const cardSpec = [
+    ['Host',       dbi.host],
+    ['Server',     dbi.server],
+    ['Mode',       dbi.mode],
+    ['Database',   dbi.db_connected || dbi.dbname],
+    ['User',       dbi.user_name || dbi.username],
+    ['Port',       dbi['db_port '] || dbi.db_port],
+    ['Block size', dbi.block_size],
+    ['Started',    dbi.db_start_date],
+    ['Up time',    dbi.up_time],
+  ];
   const dbGridEl = document.getElementById('db-grid');
   dbGridEl.innerHTML = '';
-  const dbi = parsed.dbInfo;
-  const cards = [
-    ['Host',        dbi.host],
-    ['Server',      dbi.server],
-    ['Mode',        dbi.mode],
-    ['Database',    dbi.db_connected || dbi.dbname],
-    ['User',        dbi.user_name || dbi.username],
-    ['Port',        dbi['db_port '] || dbi.db_port],
-    ['Block size',  dbi.block_size],
-    ['Started',     dbi.db_start_date],
-    ['Up time',     dbi.up_time],
-  ];
-  for (const [lbl, val] of cards) {
+  for (const [lbl, val] of cardSpec) {
     if (!val) continue;
     const c = document.createElement('div');
     c.className = 'db-card';
@@ -733,7 +897,7 @@ function render(parsed) {
     dbGridEl.appendChild(c);
   }
 
-  // Compute which sections have observations linked to them (for badges)
+  // Per-section issue badges (used in both sidebar nav and section summaries)
   const sectionIssues = new Map();
   for (const c of classified) {
     if (!c.link) continue;
@@ -742,111 +906,123 @@ function render(parsed) {
     sectionIssues.get(anchor)[c.sev]++;
   }
 
-  // Sections
+  // Sections — render the body, then build the sidebar from groups
   const sectionsEl = document.getElementById('sections');
-  sectionsEl.innerHTML = '<h2 style="font-size:1rem;margin:1.5rem 0 .5rem">Detail sections</h2>';
-  const navEl = document.getElementById('sidebar-nav');
-  navEl.innerHTML = '';
-  for (const s of parsed.sections) {
-    if (s.empty) continue;
-    const issues = sectionIssues.get(s.anchor);
-    const det = document.createElement('details');
-    det.className = 'section';
-    det.id = 'sec-' + cssEscape(s.anchor);
-    let stamp = '';
-    if (issues) {
-      if (issues.crit) stamp = `<span class="stamp has-crit">${issues.crit} critical</span>`;
-      else if (issues.warn) stamp = `<span class="stamp has-issue">${issues.warn} warning${issues.warn>1?'s':''}</span>`;
-      else if (issues.note) stamp = `<span class="stamp">${issues.note} notice${issues.note>1?'s':''}</span>`;
-    }
-    det.innerHTML = `
-      <summary>
-        <span class="chev">›</span>
-        <span class="name">${escapeHtml(s.title)}</span>
-        ${stamp}
-      </summary>
-      <div class="section-body">${s.html}</div>
-    `;
-    sectionsEl.appendChild(det);
-
-    // Sidebar nav entry
-    const a = document.createElement('a');
-    a.href = '#sec-' + cssEscape(s.anchor);
-    a.textContent = s.title;
-    a.dataset.search = s.title.toLowerCase();
-    a.addEventListener('click', () => det.open = true);
-    navEl.appendChild(a);
+  sectionsEl.innerHTML = '';
+  const sectionsByAnchor = new Map();
+  for (const s of visibleSections) {
+    sectionsByAnchor.set(s.anchor, s);
+    sectionsEl.appendChild(renderSectionDetail(s, sectionIssues.get(s.anchor)));
   }
+  buildSidebar(visibleSections, sectionsByAnchor, sectionIssues);
 
   // Show app
   document.getElementById('dropzone').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
 
-  // Search
-  const searchEl = document.getElementById('search');
-  searchEl.addEventListener('input', () => {
-    const q = searchEl.value.toLowerCase().trim();
-    for (const a of navEl.children) {
-      a.classList.toggle('hidden', q && !a.dataset.search.includes(q));
+  // Wire up search, theme, modal, scroll-spy
+  wireSearch();
+  wireTheme();
+  wireRubricModal();
+  wireScrollSpy();
+}
+
+function renderSectionDetail(s, issues) {
+  const det = document.createElement('details');
+  det.className = 'section';
+  det.id = 'sec-' + cssEscape(s.anchor);
+  let stamp = '';
+  if (issues) {
+    if (issues.crit) stamp = `<span class="stamp has-crit">${issues.crit} critical</span>`;
+    else if (issues.warn) stamp = `<span class="stamp has-issue">${issues.warn} warning${issues.warn > 1 ? 's' : ''}</span>`;
+    else if (issues.note) stamp = `<span class="stamp">${issues.note} notice${issues.note > 1 ? 's' : ''}</span>`;
+  }
+  det.innerHTML = `
+    <summary>
+      <span class="chev">›</span>
+      <span class="name">${escapeHtml(s.title)}</span>
+      ${stamp}
+    </summary>
+    <div class="section-body">${s.html}</div>
+  `;
+  return det;
+}
+
+function buildSidebar(visibleSections, byAnchor, issues) {
+  const navEl = document.getElementById('sidebar-nav');
+  navEl.innerHTML = '';
+
+  if (!SECTION_GROUPS || SECTION_GROUPS.length === 0) {
+    // Flat list
+    for (const s of visibleSections) navEl.appendChild(navLink(s, issues.get(s.anchor)));
+    return;
+  }
+
+  // Grouped: render each group, then collect uncategorized into "Other"
+  const usedAnchors = new Set();
+  for (const grp of SECTION_GROUPS) {
+    const items = (grp.sections || [])
+      .map(a => byAnchor.get(a))
+      .filter(Boolean);
+    if (items.length === 0) continue;
+
+    const head = document.createElement('div');
+    head.className = 'sidebar-section';
+    head.textContent = grp.label;
+    navEl.appendChild(head);
+
+    for (const s of items) {
+      navEl.appendChild(navLink(s, issues.get(s.anchor)));
+      usedAnchors.add(s.anchor);
     }
-  });
+  }
 
-  // Theme toggle
-  const themetoggle = document.getElementById('themetoggle');
-  themetoggle.addEventListener('click', e => {
-    const b = e.target.closest('button');
-    if (!b) return;
-    const v = b.dataset.themeSet;
-    document.body.dataset.theme = (v === 'auto' ? '' : v);
-    for (const c of themetoggle.children) c.classList.toggle('active', c === b);
-  });
+  // Uncategorized fallback
+  const leftover = visibleSections.filter(s => !usedAnchors.has(s.anchor));
+  if (leftover.length > 0) {
+    const head = document.createElement('div');
+    head.className = 'sidebar-section';
+    head.textContent = LABELS.uncategorized;
+    navEl.appendChild(head);
+    for (const s of leftover) navEl.appendChild(navLink(s, issues.get(s.anchor)));
+  }
+}
 
-  // Rubric modal
-  document.getElementById('show-rubric').addEventListener('click', e => {
-    e.preventDefault();
-    populateRubric();
-    document.getElementById('rubric-modal').classList.add('open');
+function navLink(section, issues) {
+  const a = document.createElement('a');
+  a.href = '#sec-' + cssEscape(section.anchor);
+  a.dataset.search = section.title.toLowerCase();
+  let stamp = '';
+  if (issues) {
+    if (issues.crit)      stamp = `<span class="nav-stamp crit">${issues.crit}</span>`;
+    else if (issues.warn) stamp = `<span class="nav-stamp">${issues.warn}</span>`;
+  }
+  a.innerHTML = `${escapeHtml(section.title)}${stamp}`;
+  // Click-to-open the matching <details>
+  a.addEventListener('click', () => {
+    const d = document.getElementById('sec-' + cssEscape(section.anchor));
+    if (d) d.open = true;
   });
-  document.getElementById('rubric-close').addEventListener('click', () => {
-    document.getElementById('rubric-modal').classList.remove('open');
-  });
-  document.getElementById('rubric-modal').addEventListener('click', e => {
-    if (e.target.id === 'rubric-modal') e.currentTarget.classList.remove('open');
-  });
-
-  // Scroll-spy: mark current section in sidebar
-  const sectionEls = [...sectionsEl.querySelectorAll('details.section')];
-  const navByAnchor = new Map();
-  for (const a of navEl.children) navByAnchor.set(a.getAttribute('href'), a);
-  const io = new IntersectionObserver(entries => {
-    for (const ent of entries) {
-      const a = navByAnchor.get('#' + ent.target.id);
-      if (!a) continue;
-      if (ent.isIntersecting) {
-        for (const x of navEl.children) x.classList.remove('active');
-        a.classList.add('active');
-      }
-    }
-  }, { rootMargin: '-30% 0px -65% 0px' });
-  for (const s of sectionEls) io.observe(s);
+  return a;
 }
 
 function heroCard(sev, num, label) {
   const el = document.createElement('div');
   el.className = 'hero-card ' + sev;
-  el.innerHTML = `<div class="hero-num ${sev}">${num}</div><div class="hero-label">${label}</div>`;
+  el.innerHTML = `<div class="hero-num ${sev}">${num}</div><div class="hero-label">${escapeHtml(label)}</div>`;
   return el;
 }
 
 function severityBlock(sev, items) {
   const block = document.createElement('div');
-  block.className = 'sev-block ' + sev + (sev === 'note' ? ' collapsed' : '');
-  const sevLabel = { crit: 'Critical', warn: 'Warnings', note: 'Notices' }[sev];
+  const expanded = (DEFAULTS.expandedBlocks || []).includes(sev);
+  block.className = 'sev-block ' + sev + (expanded ? '' : ' collapsed');
+  const sevLabel = { crit: LABELS.heroCritical, warn: LABELS.heroWarnings, note: LABELS.heroNotices }[sev];
   const sevIcon  = { crit: '⛔', warn: '⚠', note: 'ⓘ' }[sev];
   block.innerHTML = `
     <div class="sev-head">
       <span class="icon">${sevIcon}</span>
-      <span>${sevLabel}</span>
+      <span>${escapeHtml(sevLabel)}</span>
       <span class="count">${items.length} item${items.length>1?'s':''}</span>
       <span class="chev">›</span>
     </div>
@@ -860,8 +1036,9 @@ function severityBlock(sev, items) {
     const link = it.link
       ? `<a class="goto" href="#sec-${cssEscape(it.link.replace(/^#/, ''))}">view → ${escapeHtml(it.linkLabel)}</a>`
       : '';
+    const sevText = sev === 'crit' ? 'critical' : sev === 'warn' ? 'warning' : 'notice';
     row.innerHTML = `
-      <span class="badge" title="${escapeHtml(it.why)}">${sev === 'crit' ? 'critical' : sev === 'warn' ? 'warning' : 'notice'}</span>
+      <span class="badge" title="${escapeHtml(it.why)}">${sevText}</span>
       <span class="text">${escapeHtml(it.label)}<br><span class="why">${escapeHtml(it.why)}</span></span>
       ${link}
     `;
@@ -870,13 +1047,71 @@ function severityBlock(sev, items) {
   return block;
 }
 
+function wireSearch() {
+  const navEl = document.getElementById('sidebar-nav');
+  const searchEl = document.getElementById('search');
+  searchEl.addEventListener('input', () => {
+    const q = searchEl.value.toLowerCase().trim();
+    for (const child of navEl.children) {
+      if (child.tagName === 'A') {
+        child.classList.toggle('hidden', q && !child.dataset.search.includes(q));
+      }
+      // Group headings stay visible — they reveal whether their group has hits
+    }
+  });
+}
+
+function wireTheme() {
+  const themetoggle = document.getElementById('themetoggle');
+  themetoggle.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    const v = b.dataset.themeSet;
+    document.body.dataset.theme = (v === 'auto' ? '' : v);
+    for (const c of themetoggle.children) c.classList.toggle('active', c === b);
+  });
+}
+
+function wireRubricModal() {
+  document.getElementById('show-rubric').addEventListener('click', e => {
+    e.preventDefault();
+    populateRubric();
+    document.getElementById('rubric-modal').classList.add('open');
+  });
+  document.getElementById('rubric-close').addEventListener('click', () => {
+    document.getElementById('rubric-modal').classList.remove('open');
+  });
+  document.getElementById('rubric-modal').addEventListener('click', e => {
+    if (e.target.id === 'rubric-modal') e.currentTarget.classList.remove('open');
+  });
+}
+
+function wireScrollSpy() {
+  const navEl = document.getElementById('sidebar-nav');
+  const navByAnchor = new Map();
+  for (const a of navEl.querySelectorAll('a')) navByAnchor.set(a.getAttribute('href'), a);
+  const sectionEls = [...document.querySelectorAll('details.section')];
+  const io = new IntersectionObserver(entries => {
+    for (const ent of entries) {
+      const a = navByAnchor.get('#' + ent.target.id);
+      if (!a) continue;
+      if (ent.isIntersecting) {
+        for (const x of navEl.querySelectorAll('a')) x.classList.remove('active');
+        a.classList.add('active');
+      }
+    }
+  }, { rootMargin: '-30% 0px -65% 0px' });
+  for (const s of sectionEls) io.observe(s);
+}
+
 function populateRubric() {
   const t = document.getElementById('rubric-table');
   t.innerHTML = '<tr><th>Severity</th><th>Pattern matches</th><th>Why</th></tr>';
   for (const r of RUBRIC) {
+    const sevText = r.sev === 'crit' ? 'critical' : r.sev === 'warn' ? 'warning' : 'notice';
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><span class="badge" style="background:var(--${r.sev}-bd);color:white;padding:.1rem .4rem;border-radius:3px;font-size:.7rem;font-weight:600;text-transform:uppercase">${r.sev === 'crit' ? 'critical' : r.sev === 'warn' ? 'warning' : 'notice'}</span></td>
+      <td><span style="background:var(--${r.sev}-bd);color:white;padding:.1rem .4rem;border-radius:3px;font-size:.7rem;font-weight:600;text-transform:uppercase">${sevText}</span></td>
       <td>${escapeHtml(r.label)}</td>
       <td>${escapeHtml(r.why)}</td>
     `;
@@ -885,15 +1120,17 @@ function populateRubric() {
 }
 
 function escapeHtml(s) {
-  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return String(s ?? '').replace(/[&<>"']/g, c =>
+      ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
-function cssEscape(s) {
-  return String(s).replace(/[^a-zA-Z0-9_-]/g, '_');
-}
+function cssEscape(s) { return String(s).replace(/[^a-zA-Z0-9_-]/g, '_'); }
 
-/* ============================================================
- *  File loading
- * ============================================================ */
+/* ###########################################################
+ * #                                                         #
+ * #              4. BOOTSTRAP — file loading                #
+ * #                                                         #
+ * ########################################################### */
+
 const dropzone = document.getElementById('dropzone');
 const filepick = document.getElementById('filepick');
 const errEl = document.getElementById('err');
@@ -920,27 +1157,26 @@ function loadFile(file) {
 }
 
 filepick.addEventListener('change', e => loadFile(e.target.files[0]));
-
 ['dragenter','dragover'].forEach(ev =>
   dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.add('dragover'); })
 );
 ['dragleave','drop'].forEach(ev =>
   dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.remove('dragover'); })
 );
-dropzone.addEventListener('drop', e => {
-  const f = e.dataTransfer.files && e.dataTransfer.files[0];
-  loadFile(f);
-});
+dropzone.addEventListener('drop', e => loadFile(e.dataTransfer.files && e.dataTransfer.files[0]));
 
-// Optional: ?report=<url> query param auto-loads
+// Apply labels to static markup, then bootstrap
+applyLabels();
+applyInitialTheme();
+
+// Optional: ?report=<url> auto-loads
 (async () => {
   const url = new URLSearchParams(location.search).get('report');
   if (!url) return;
   try {
     const r = await fetch(url);
     if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
-    const t = await r.text();
-    const parsed = parseReport(t);
+    const parsed = parseReport(await r.text());
     render(parsed);
   } catch (e) {
     errEl.textContent = 'Failed to load ?report=' + url + ': ' + e.message;

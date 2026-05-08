@@ -321,6 +321,11 @@
                   color: var(--muted); font-weight: 600; }
   .db-card .val { margin-top: .15rem; font-size: .95rem; }
 
+  /* Inline size-bar visualization (no charting library). */
+  .sizebar { display: inline-block; vertical-align: middle; margin-left: .5rem;
+             color: var(--accent); opacity: .6; }
+  .sizebar svg { display: block; }
+
   /* Section blocks (the original content, restyled) */
   .section {
     background: var(--surface); border: 1px solid var(--border);
@@ -743,41 +748,95 @@ function extractObservations(doc) {
 }
 
 function extractSections(doc) {
+  // psql's HTML output emits <p>(N rows)</p> after each result table; the HTML5
+  // parser implicitly opens/closes <p> blocks, which means anchors after the
+  // first one end up nested inside <p> elements rather than being body-level
+  // siblings of the first anchor. Sibling-walking can't traverse this — we
+  // need cross-tree extraction. The Range API does that natively.
   const anchors = [...doc.querySelectorAll('a[name]')]
     .filter(a => a.getAttribute('name') && a.getAttribute('name') !== 'top');
   const sections = [];
   for (let i = 0; i < anchors.length; i++) {
     const a = anchors[i];
     const next = anchors[i + 1] || null;
+
+    // Title detection still works via siblings: the <font size+2> title is
+    // always emitted right after each anchor at the same parent level.
     let titleEl = a.nextElementSibling;
     while (titleEl && titleEl.tagName !== 'FONT') titleEl = titleEl.nextElementSibling;
     const title = titleEl ? titleEl.textContent.trim() : a.getAttribute('name');
 
-    const wrap = document.createElement('div');
-    let n = a.nextSibling;
-    let pastTitle = false;
-    while (n && n !== next) {
-      const clone = n.cloneNode(true);
-      if (!pastTitle && clone.nodeType === Node.ELEMENT_NODE) {
-        if (clone.tagName === 'FONT' && /size="\+2"/.test(clone.outerHTML || '')) {
-          n = n.nextSibling; pastTitle = true; continue;
-        }
-        if (clone.tagName === 'HR' && !pastTitle) {
-          pastTitle = true; n = n.nextSibling; continue;
-        }
-      }
-      wrap.appendChild(clone);
-      n = n.nextSibling;
-    }
+    // Range from after-this-anchor to before-next-anchor (or end-of-body).
+    const range = doc.createRange();
+    range.setStartAfter(a);
+    if (next) range.setEndBefore(next);
+    else      range.setEndAfter(doc.body.lastChild);
+
+    const fragment = range.cloneContents();
+    const wrap = doc.createElement('div');
+    wrap.appendChild(fragment);
+
+    // psql wraps result tables with <p>(N rows)</p>; the HTML5 parser then
+    // re-parents subsequent content into those <p>s. Unwrap top-level <p>s
+    // so the rendered section reads as flat content.
+    unwrapTopLevelPs(wrap);
+
+    // Strip the title font + the <hr> that follows it from the wrap.
+    stripLeadingTitle(wrap);
+
     sections.push({
       anchor: a.getAttribute('name'),
       title,
       html: wrap.innerHTML.trim(),
-      text: wrap.innerText || '',
-      empty: isEmptySection(wrap.innerText || ''),
+      text: (wrap.textContent || '').trim(),
+      empty: isEmptySection(wrap.textContent || ''),
     });
   }
   return sections;
+}
+
+// Remove the first <font size="+2"> (the section title we already captured)
+// and the <hr> that immediately follows it. Both are inside <p> wrappers
+// for non-first sections, so we descend into element children when needed.
+function stripLeadingTitle(root) {
+  // Find the first <font size="+2"> in document order
+  const titleFont = root.querySelector('font[size="+2"]');
+  if (!titleFont) return;
+  // Find the first <hr> that comes after the title font in document order
+  let hr = null;
+  let n = titleFont;
+  while ((n = nextNodeInOrder(n))) {
+    if (n.nodeType === 1 && n.tagName === 'HR') { hr = n; break; }
+    if (n.nodeType === 1 && n.tagName !== 'P' && n.tagName !== 'BR') break;
+  }
+  if (titleFont.parentNode) titleFont.parentNode.removeChild(titleFont);
+  if (hr && hr.parentNode) hr.parentNode.removeChild(hr);
+}
+
+function nextNodeInOrder(node) {
+  if (node.firstChild) return node.firstChild;
+  while (node) {
+    if (node.nextSibling) return node.nextSibling;
+    node = node.parentNode;
+  }
+  return null;
+}
+
+function unwrapTopLevelPs(root) {
+  // For each <p> that's a direct child of root, replace it with its children.
+  // Repeat until no more top-level <p>s — handles nested cases.
+  let changed = true;
+  let safety = 100;
+  while (changed && safety-- > 0) {
+    changed = false;
+    for (const p of [...root.children]) {
+      if (p.tagName === 'P') {
+        while (p.firstChild) root.insertBefore(p.firstChild, p);
+        root.removeChild(p);
+        changed = true;
+      }
+    }
+  }
 }
 
 function isEmptySection(text) {
@@ -945,7 +1004,57 @@ function renderSectionDetail(s, issues) {
     </summary>
     <div class="section-body">${s.html}</div>
   `;
+  // Add inline SVG bars to size-like columns inside this section's tables
+  decorateSizeColumns(det.querySelector('.section-body'));
   return det;
+}
+
+/* Detect tables whose columns contain Postgres-style size values
+ * ("7507 kB", "1.2 GB", etc.) and append a small SVG bar to each cell,
+ * normalized to the maximum value in that column. Pure inline SVG —
+ * no charting library, no external dependency. */
+function decorateSizeColumns(scope) {
+  if (!scope) return;
+  for (const tbl of scope.querySelectorAll('table')) {
+    const headers = [...tbl.querySelectorAll('th')].map(t => t.textContent.toLowerCase().trim());
+    const sizeCols = headers
+      .map((h, i) => /\b(size|bytes|length)\b/.test(h) ? i : -1)
+      .filter(i => i >= 0);
+    if (sizeCols.length === 0) continue;
+    const rows = [...tbl.querySelectorAll('tr')].slice(1);
+    for (const col of sizeCols) {
+      const values = rows.map(r => {
+        const td = r.querySelectorAll('td')[col];
+        return td ? parseSize(td.textContent) : null;
+      });
+      const max = Math.max(...values.filter(v => v != null && v > 0), 0);
+      if (!max) continue;
+      rows.forEach((r, i) => {
+        const v = values[i];
+        if (v == null || v <= 0) return;
+        const td = r.querySelectorAll('td')[col];
+        if (!td || td.querySelector('.sizebar')) return;
+        const w = Math.max(2, Math.round(v / max * 80));
+        const span = document.createElement('span');
+        span.className = 'sizebar';
+        span.title = `${(v / max * 100).toFixed(1)}% of largest`;
+        span.innerHTML = `<svg width="80" height="6"><rect x="0" y="1" width="${w}" height="4" rx="1" fill="currentColor"/></svg>`;
+        td.appendChild(span);
+      });
+    }
+  }
+}
+
+function parseSize(text) {
+  if (!text) return null;
+  const m = text.trim().match(/^([\d,.]+)\s*(bytes|byte|b|kb|mb|gb|tb|pb)?$/i);
+  if (!m) return null;
+  const num = parseFloat(m[1].replace(/,/g, ''));
+  if (!isFinite(num)) return null;
+  const u = (m[2] || '').toLowerCase();
+  const mult = { '':1,'b':1,'byte':1,'bytes':1,
+                 'kb':1024,'mb':1024**2,'gb':1024**3,'tb':1024**4,'pb':1024**5 };
+  return num * (mult[u] || 1);
 }
 
 function buildSidebar(visibleSections, byAnchor, issues) {
@@ -991,7 +1100,10 @@ function buildSidebar(visibleSections, byAnchor, issues) {
 function navLink(section, issues) {
   const a = document.createElement('a');
   a.href = '#sec-' + cssEscape(section.anchor);
-  a.dataset.search = section.title.toLowerCase();
+  // Full-text search: title + section text body. Cap at 50K chars to keep
+  // dataset attribute reasonable across 56 sections.
+  const idxText = (section.title + ' ' + (section.text || '')).toLowerCase();
+  a.dataset.search = idxText.length > 50000 ? idxText.slice(0, 50000) : idxText;
   let stamp = '';
   if (issues) {
     if (issues.crit)      stamp = `<span class="nav-stamp crit">${issues.crit}</span>`;
@@ -1052,12 +1164,28 @@ function wireSearch() {
   const searchEl = document.getElementById('search');
   searchEl.addEventListener('input', () => {
     const q = searchEl.value.toLowerCase().trim();
+    // Pass 1: show/hide each link based on full-text match
     for (const child of navEl.children) {
       if (child.tagName === 'A') {
         child.classList.toggle('hidden', q && !child.dataset.search.includes(q));
       }
-      // Group headings stay visible — they reveal whether their group has hits
     }
+    // Pass 2: hide group headings whose entire group is now hidden
+    let currentHead = null;
+    let groupHasVisible = false;
+    const flush = () => {
+      if (currentHead) currentHead.classList.toggle('hidden', q && !groupHasVisible);
+    };
+    for (const child of navEl.children) {
+      if (child.classList.contains('sidebar-section')) {
+        flush();
+        currentHead = child;
+        groupHasVisible = false;
+      } else if (child.tagName === 'A') {
+        if (!child.classList.contains('hidden')) groupHasVisible = true;
+      }
+    }
+    flush();
   });
 }
 

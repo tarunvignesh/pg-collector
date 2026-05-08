@@ -5,9 +5,12 @@ None of these modify `pg_collector.sql`.
 
 ## `enhance.html` — modern viewer
 
-A self-contained, browser-only post-processor. Drop a `pg_collector_*.html`
-report onto it (or pass `?report=URL`) and it renders a modern UI on top
-of the existing report DOM:
+One file. ~51 KB. No dependencies — no Node, no Python, no npm, no CDN,
+no `<script src>`, no `import`, no build step. Pure HTML + CSS +
+browser-native JavaScript. Works offline forever.
+
+Drop a `pg_collector_*.html` report onto it (or pass `?report=URL`) and
+it renders a modern UI on top of the existing report DOM:
 
 - Hero stats (critical / warning / notice counts) above the fold
 - Severity-grouped findings with rationale tooltips
@@ -16,14 +19,29 @@ of the existing report DOM:
 
 ### Open it
 
-```bash
-# direct file
-xdg-open tools/enhance.html             # then drag-drop a report
+The fastest path:
 
-# or serve and auto-load a specific report
-python3 -m http.server 8770
-# → http://127.0.0.1:8770/tools/enhance.html?report=/path/to/report.html
+```bash
+xdg-open tools/enhance.html             # or just double-click the file
 ```
+
+Then drag-and-drop a `pg_collector_*.html` onto the page. That's it.
+Nothing to install, nothing to run.
+
+If you'd like to use the `?report=URL` query-param to auto-load a
+specific report (handy for sharing links, or previewing a CI artifact),
+that path needs *some* HTTP server because the browser blocks
+cross-origin file fetches. Any static server works — pick whatever
+you have:
+
+```bash
+python3 -m http.server 8770       # if you have Python
+busybox httpd -f -p 8770          # if you have busybox
+ruby -run -e httpd . -p 8770      # if you have Ruby
+# … anything that serves files over HTTP
+```
+
+Then visit `http://127.0.0.1:8770/tools/enhance.html?report=/path/to/report.html`.
 
 ### Customizing it
 
@@ -173,27 +191,43 @@ right below — adjust `max-width: 900px` to taste.
 
 ### Testing changes
 
-The tool reads HTML in the browser, so the iteration loop is:
+There is no build step. The iteration loop is:
 
-1. Edit `tools/enhance.html`
-2. Reload the browser tab (with cache disabled in devtools is helpful)
-3. Drop a sample report or use `?report=path/to/report.html`
+1. Edit `tools/enhance.html`.
+2. Reload the browser tab (devtools "disable cache" is helpful).
+3. Drop a sample report or use `?report=path/to/report.html`.
 
 A sample report ships in `sample_reports/`. Older format but exercises
-most of the same DOM patterns.
+most of the same DOM patterns. Recent CI runs leave fresh reports under
+`tests/artifacts/<timestamp>/report.html`.
 
-For automated sanity-checks:
+#### Optional: pre-reload syntax check
+
+If you want to catch JS syntax errors without leaving the terminal,
+any JavaScript engine you already have on the box works. None of these
+are required — reloading the browser with devtools open shows the same
+errors. Examples:
 
 ```bash
-# Extract embedded JS and syntax-check
-python3 -c "
-import re
-with open('tools/enhance.html') as f: t = f.read()
-m = re.search(r'<script[^>]*>(.*?)</script>', t, re.DOTALL)
-open('/tmp/enhance.js','w').write(m.group(1))
-" && node --check /tmp/enhance.js
+node --check tools/enhance.html        # node treats <script> contents as JS — works for syntax
+deno check  tools/enhance.html         # if you have deno
 ```
 
 Visual changes need eyeballs — there's no automated regression suite
 for the viewer (yet). If you add one, drop it in
 `tests/test_viewer.js` and we'll wire it into CI.
+
+### What this viewer is *not*
+
+To keep the lightweight promise, some things are deliberately out of scope:
+
+- **No frontend framework** (React/Vue/Svelte). Plain DOM and `<details>`.
+- **No charting library**. Bar charts and sparklines would be nice but
+  add 100 KB+ as soon as you bring in a library.
+- **No bundler / npm**. The file is the artifact.
+- **No telemetry, no remote calls**. The page never makes a network
+  request except via your explicit `?report=URL`. Drag-drop processing
+  is 100% local.
+
+If you want any of those, fork and add them — but consider whether the
+51 KB / zero-deps property is worth keeping first.

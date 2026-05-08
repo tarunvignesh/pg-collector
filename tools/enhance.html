@@ -1262,12 +1262,24 @@ function renderSectionDetail(s, issues) {
  * ============================================================ */
 function decorateDbParams(scope, params) {
   if (!scope || !params.length) return;
-  // Hide the original raw table; we'll keep it accessible via toggle.
+  // Locate the original raw table. In the source markup it's wrapped in a
+  // <details> element, so the table is not necessarily a direct child of
+  // scope. Walk up from the table to find its top-level ancestor inside
+  // scope; we hide that whole subtree (so the <details> disclosure widget
+  // doesn't render either) and let the user toggle it back via "Show raw".
   const origTable = [...scope.querySelectorAll('table')].find(t => {
     const hs = [...t.querySelectorAll('th')].map(th => th.textContent.trim().toLowerCase());
     return hs.includes('name') && hs.includes('setting') && hs.includes('category');
   });
-  if (origTable) origTable.classList.add('params-raw-table');
+  let rawContainer = null;
+  if (origTable) {
+    rawContainer = origTable;
+    while (rawContainer.parentNode && rawContainer.parentNode !== scope) {
+      rawContainer = rawContainer.parentNode;
+    }
+    rawContainer.style.display = 'none';
+    origTable.classList.add('params-raw-table');
+  }
 
   // Build toolbar + tuning panel + grouped list
   const container = document.createElement('div');
@@ -1312,9 +1324,12 @@ function decorateDbParams(scope, params) {
       <button class="secondary" id="show-raw" style="font-size:.8rem;padding:.3rem .65rem;background:transparent;border:1px solid var(--border);border-radius:4px;color:var(--muted);cursor:pointer">Show raw table</button>
     </div>
   `;
-  // Insert before the (now hidden) raw table
-  if (origTable) scope.insertBefore(container, origTable);
-  else           scope.appendChild(container);
+  // Prepend to scope. Doing it via firstChild guarantees the call works
+  // regardless of whether scope has any children. (The previous code did
+  // `insertBefore(container, origTable)` and crashed when origTable was
+  // nested inside a <details> wrapper from psql, not a direct child of
+  // scope.)
+  scope.insertBefore(container, scope.firstChild);
 
   // Group params by category
   const byCategory = new Map();
@@ -1388,12 +1403,14 @@ function decorateDbParams(scope, params) {
   searchEl.addEventListener('input', refilter);
   ndToggle.addEventListener('change', refilter);
   tuneBtn.addEventListener('click', () => tunePanel.classList.toggle('hidden'));
-  if (showRawBtn && origTable) {
+  if (showRawBtn && rawContainer) {
     showRawBtn.addEventListener('click', () => {
-      origTable.classList.toggle('visible');
-      showRawBtn.textContent = origTable.classList.contains('visible')
-        ? 'Hide raw table' : 'Show raw table';
+      const showing = rawContainer.style.display !== 'none';
+      rawContainer.style.display = showing ? 'none' : '';
+      showRawBtn.textContent = showing ? 'Show raw table' : 'Hide raw table';
     });
+  } else if (showRawBtn) {
+    showRawBtn.style.display = 'none';
   }
 
   // Wire tuning form

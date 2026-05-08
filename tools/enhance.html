@@ -1082,6 +1082,11 @@ function extractSections(doc) {
     // Strip the title font + the <hr> that follows it from the wrap.
     stripLeadingTitle(wrap);
 
+    // SECURITY: the section content is user-supplied HTML (the report).
+    // Strip event handlers, dangerous URL schemes, and active elements
+    // before we re-inject via innerHTML in the renderer.
+    sanitizeFragment(wrap);
+
     sections.push({
       anchor: a.getAttribute('name'),
       title,
@@ -1118,6 +1123,48 @@ function nextNodeInOrder(node) {
     node = node.parentNode;
   }
   return null;
+}
+
+/* SECURITY — strip XSS vectors from a cloned report fragment before it's
+ * injected back into the page via innerHTML.
+ *
+ * Removes:
+ *   - active elements that could load remote content or execute code
+ *     (<script>, <iframe>, <object>, <embed>, <link rel=import>, <meta>)
+ *   - all event-handler attributes (anything starting with `on`)
+ *   - URL-bearing attributes whose value uses a dangerous scheme
+ *     (javascript:, data:, vbscript:)
+ *
+ * Modern browsers already neutralize <script> inserted via innerHTML, but
+ * SVG/HTML event handlers (onload, onerror, onclick, etc.) DO fire — that's
+ * the actual XSS surface. */
+function sanitizeFragment(root) {
+  const DROP_TAGS = new Set([
+    'SCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'BASE',
+    'NOSCRIPT', 'STYLE',
+  ]);
+  const URL_ATTRS = new Set([
+    'href', 'src', 'action', 'formaction', 'background', 'cite',
+    'codebase', 'data', 'longdesc', 'usemap', 'lowsrc', 'ping', 'srcset',
+    'xlink:href',
+  ]);
+  const BAD_SCHEME = /^\s*(javascript|data|vbscript):/i;
+  // Drop dangerous elements
+  for (const el of [...root.querySelectorAll('*')]) {
+    if (DROP_TAGS.has(el.tagName)) {
+      el.remove();
+      continue;
+    }
+    for (const attr of [...el.attributes]) {
+      const name = attr.name.toLowerCase();
+      // Strip every event handler
+      if (name.startsWith('on')) { el.removeAttribute(attr.name); continue; }
+      // Strip dangerous URL schemes from URL-bearing attributes
+      if (URL_ATTRS.has(name) && BAD_SCHEME.test(attr.value || '')) {
+        el.removeAttribute(attr.name);
+      }
+    }
+  }
 }
 
 function unwrapTopLevelPs(root) {
@@ -2073,10 +2120,17 @@ dropzone.addEventListener('drop', e => loadFile(e.dataTransfer.files && e.dataTr
 applyLabels();
 applyInitialTheme();
 
-// Optional: ?report=<url> auto-loads
+// Optional: ?report=<url> auto-loads. Restricted to same-origin / relative
+// URLs to prevent cross-origin probing if the viewer is ever hosted publicly.
 (async () => {
   const url = new URLSearchParams(location.search).get('report');
   if (!url) return;
+  if (!isSafeReportUrl(url)) {
+    errEl.textContent = 'Refused ?report=' + url + ': cross-origin URLs are not allowed. ' +
+                        'Use a relative path or a same-origin URL.';
+    errEl.classList.remove('hidden');
+    return;
+  }
   try {
     const r = await fetch(url);
     if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
@@ -2088,6 +2142,19 @@ applyInitialTheme();
     errEl.classList.remove('hidden');
   }
 })();
+
+/* Reject URLs that resolve to a different origin than this page.
+ * For file:// usage, both protocol and host (empty string) match,
+ * which is fine — the user has file-system access there anyway. */
+function isSafeReportUrl(url) {
+  if (!url || url.startsWith('//')) return false;
+  try {
+    const u = new URL(url, location.href);
+    return u.protocol === location.protocol && u.host === location.host;
+  } catch {
+    return false;
+  }
+}
 </script>
 </body>
 </html>

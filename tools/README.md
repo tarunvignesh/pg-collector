@@ -50,6 +50,10 @@ of the `<script>` block. Each customization point is documented inline
 with a comment block. The file's top comment header lists every entry
 point — open `tools/enhance.html` and search for the matching section.
 
+> **Adding a new section to `pg_collector.sql` and making it render
+> well in the viewer?** See [`CUSTOMIZING.md`](CUSTOMIZING.md) — it walks
+> through the end-to-end flow with a worked example.
+
 #### Recipe: change colors / theme
 
 Every color is a CSS custom property in the `<style>` block under the

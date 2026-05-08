@@ -57,6 +57,10 @@ Reading the whole file linearly is rarely what you want. The big-picture structu
 
 ## Adding a health check (Observations section)
 
+For an end-to-end walkthrough that also covers making the new section
+render well in `tools/enhance.html` (the modern post-processor viewer),
+see [`tools/CUSTOMIZING.md`](tools/CUSTOMIZING.md).
+
 The CHANGELOG for v3.2 lists the 19 existing checks. To add one:
 1. Pick an anchor name that matches the detail section the check should link to.
 2. In the Observations block, add a `select count(*) > 0 obsrv_<name> ... \gset` + `\if :obsrv_<name>` stanza with a `\qecho` containing a `<a class="link" href="#<anchor>">` link.

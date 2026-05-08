@@ -326,6 +326,97 @@
              color: var(--accent); opacity: .6; }
   .sizebar svg { display: block; }
 
+  /* DB Parameters — toolbar, tuning form, grouped param rows */
+  .params-toolbar {
+    display: flex; flex-wrap: wrap; gap: .5rem; align-items: center;
+    margin: .5rem 0 1rem; padding: .65rem; background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: var(--radius);
+  }
+  .params-toolbar input[type=search],
+  .params-toolbar select,
+  .params-toolbar input[type=number] {
+    padding: .35rem .55rem; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); background: var(--surface);
+    color: var(--text); font-size: .85rem; font-family: inherit;
+  }
+  .params-toolbar input[type=search] { min-width: 220px; flex: 1 0 200px; }
+  .params-toolbar .toggle-lbl { font-size: .85rem; color: var(--text); display: inline-flex; gap: .35rem; align-items: center; }
+  .params-toolbar button {
+    padding: .35rem .85rem; cursor: pointer; background: var(--accent);
+    color: white; border: 1px solid var(--accent); border-radius: var(--radius-sm);
+    font-size: .85rem; font-weight: 500;
+  }
+  .params-toolbar button.secondary { background: var(--surface); color: var(--text); border-color: var(--border); }
+  .params-toolbar button:hover { opacity: .9; }
+  .params-stats { font-size: .8rem; color: var(--muted); margin-left: auto; }
+
+  .params-tune {
+    margin: 0 0 1rem; padding: 1rem 1.25rem; background: var(--note-bg);
+    border: 1px solid var(--note-bd); border-radius: var(--radius);
+  }
+  .params-tune.hidden { display: none; }
+  .params-tune h4 { margin: 0 0 .5rem; font-size: .95rem; color: var(--note-fg); }
+  .params-tune-form {
+    display: grid; grid-template-columns: repeat(auto-fit,minmax(150px,1fr));
+    gap: .75rem .85rem; align-items: end;
+  }
+  .params-tune-form label { font-size: .75rem; color: var(--muted); text-transform: uppercase;
+                            letter-spacing: .04em; font-weight: 600; display: block; }
+  .params-tune-form .field input,
+  .params-tune-form .field select {
+    width: 100%; padding: .35rem .55rem; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); background: var(--surface); color: var(--text);
+    font-size: .85rem; margin-top: .15rem;
+  }
+  .params-tune-actions { margin-top: .85rem; display: flex; gap: .5rem; align-items: center; }
+
+  .params-list { display: grid; gap: .5rem; }
+  .params-group {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .params-group > summary {
+    list-style: none; padding: .55rem .85rem; cursor: pointer; user-select: none;
+    display: flex; align-items: center; gap: .65rem; font-weight: 600; font-size: .9rem;
+  }
+  .params-group > summary::-webkit-details-marker { display: none; }
+  .params-group > summary .chev { color: var(--muted); transition: transform .15s; font-size: .8rem; }
+  .params-group[open] > summary .chev { transform: rotate(90deg); }
+  .params-group > summary .gname { flex: 1; }
+  .params-group > summary .gcount { font-size: .75rem; color: var(--muted); }
+  .params-group > summary .gnondefault {
+    font-size: .7rem; padding: .1rem .4rem; border-radius: 4px; font-weight: 600;
+    background: var(--warn-bg); color: var(--warn-fg);
+  }
+
+  .param-row {
+    display: grid; grid-template-columns: 220px 1fr 90px;
+    gap: .65rem 1rem; padding: .5rem .85rem; border-top: 1px solid var(--border);
+    font-size: .85rem; align-items: baseline;
+  }
+  .param-row.non-default { background: linear-gradient(to right, var(--warn-bg) 0, var(--warn-bg) 3px, transparent 3px); }
+  .param-row.hidden { display: none; }
+  .param-row .pname { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .82rem; }
+  .param-row .pvalue { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .82rem; }
+  .param-row .pvalue .unit { color: var(--muted); font-size: .75rem; margin-left: .15rem; }
+  .param-row .psource { font-size: .7rem; padding: .1rem .4rem; border-radius: 4px;
+                        background: var(--surface-2); color: var(--muted); border: 1px solid var(--border);
+                        text-transform: uppercase; letter-spacing: .03em; font-weight: 600;
+                        text-align: center; }
+  .param-row .psource.non-default { background: var(--warn-bg); color: var(--warn-fg); border-color: var(--warn-bd); }
+  .param-row .pdesc { grid-column: 1 / -1; font-size: .78rem; color: var(--muted); margin-top: .15rem; }
+  .param-row .ptune {
+    grid-column: 2 / 3; font-size: .75rem; color: var(--note-fg);
+    background: var(--note-bg); padding: .15rem .45rem; border-radius: 4px;
+    border: 1px solid var(--note-bd); margin-top: .25rem;
+    display: inline-block; align-self: start;
+  }
+  .param-row .ptune.divergent { background: var(--warn-bg); color: var(--warn-fg); border-color: var(--warn-bd); }
+
+  .params-raw-toggle { margin-top: 1rem; }
+  .params-raw-table { display: none; margin-top: 1rem; }
+  .params-raw-table.visible { display: block; }
+
   /* Section blocks (the original content, restyled) */
   .section {
     background: var(--surface); border: 1px solid var(--border);
@@ -687,7 +778,34 @@ function parseReport(html) {
   const dbInfo = extractDbInfo(doc);
   const observations = extractObservations(doc);
   const sections = extractSections(doc);
+  // Augment sections with structured data where we know the schema. This is
+  // the foundation for future tooling (sqlite export, comparison, etc.).
+  for (const s of sections) {
+    if (s.anchor === 'DB_parameters') s.params = parseParamsTable(s);
+  }
   return { title, dbInfo, observations, sections };
+}
+
+/* Extract { name, setting, unit, category, short_desc, source, ... } records
+ * from the params table inside the DB Parameters section. Used both by the
+ * UI (for the redesigned grouped view) and exposed via window.pgcReport
+ * for downstream tooling. */
+function parseParamsTable(section) {
+  const wrap = document.createElement('div');
+  wrap.innerHTML = section.html;
+  const tbl = [...wrap.querySelectorAll('table')].find(t => {
+    const hs = [...t.querySelectorAll('th')].map(th => th.textContent.trim().toLowerCase());
+    return hs.includes('name') && hs.includes('setting') && hs.includes('category');
+  });
+  if (!tbl) return [];
+  const headers = [...tbl.querySelectorAll('th')].map(th => th.textContent.trim().toLowerCase());
+  const rows = [...tbl.querySelectorAll('tr')].slice(1);
+  return rows.map(r => {
+    const cells = [...r.querySelectorAll('td')].map(td => td.textContent.replace(/ /g, ' ').trim());
+    const obj = {};
+    headers.forEach((h, i) => { obj[h] = cells[i] || ''; });
+    return obj;
+  });
 }
 
 function extractDbInfo(doc) {
@@ -854,6 +972,125 @@ function classify(text) {
   return { sev: 'note', label: 'Other', why: 'Not in the built-in rubric — defaulting to notice.' };
 }
 
+/* ============================================================
+ * PGTune — recommended values for selected GUC parameters,
+ * given system specs. Adapted from
+ * https://github.com/le0pard/pgtune (MIT license).
+ * Pure JS, no dependencies. Returns a flat { paramName: value }
+ * object with values formatted as Postgres-friendly strings.
+ * ============================================================ */
+function pgtune(opts) {
+  const { totalRamGB, cpuCount, dbType, storage, connections } = opts;
+  const RAM_KB = totalRamGB * 1024 * 1024;
+  const r = {};
+
+  // max_connections — by workload, unless overridden
+  const defaultConn = { web: 200, oltp: 300, dw: 40, desktop: 20, mixed: 100 };
+  r.max_connections = String(connections || defaultConn[dbType] || 100);
+
+  // shared_buffers: 25% of RAM
+  r.shared_buffers = formatKB(Math.round(RAM_KB / 4));
+
+  // effective_cache_size: 75% of RAM
+  r.effective_cache_size = formatKB(Math.round(RAM_KB * 3 / 4));
+
+  // maintenance_work_mem: RAM/16, capped at 2GB
+  let mwm = Math.round(RAM_KB / 16);
+  if (mwm > 2 * 1024 * 1024) mwm = 2 * 1024 * 1024;
+  r.maintenance_work_mem = formatKB(mwm);
+
+  // checkpoint_completion_target — 0.9 (PG default since 14)
+  r.checkpoint_completion_target = '0.9';
+
+  // wal_buffers: shared_buffers/32, capped at 16MB, min 32kB
+  let wb = Math.round((RAM_KB / 4) / 32);
+  if (wb > 16 * 1024) wb = 16 * 1024;
+  if (wb < 32) wb = 32;
+  r.wal_buffers = formatKB(wb);
+
+  // default_statistics_target
+  r.default_statistics_target = (dbType === 'dw') ? '500' : '100';
+
+  // random_page_cost
+  r.random_page_cost = (storage === 'hdd') ? '4' : '1.1';
+
+  // effective_io_concurrency
+  r.effective_io_concurrency = String({ ssd: 200, san: 300, hdd: 2 }[storage] || 200);
+
+  // work_mem: ((RAM - shared_buffers) / max_connections / 3) / parallel_workers_per_gather, by type
+  const mpwpg = Math.max(1, Math.floor(cpuCount / 2));
+  const wmDivisor = parseInt(r.max_connections, 10) * 3 * mpwpg;
+  let wm = Math.round((RAM_KB - RAM_KB / 4) / wmDivisor);
+  const wmMult = { web: 1, oltp: 1, dw: 2, desktop: 1 / 6, mixed: 1 }[dbType] || 1;
+  wm = Math.max(64, Math.round(wm * wmMult));
+  r.work_mem = formatKB(wm);
+
+  // huge_pages: try when shared_buffers will exceed ~32GB-ish (i.e. RAM ≥ ~32GB)
+  r.huge_pages = (totalRamGB >= 32) ? 'try' : 'off';
+
+  // min/max_wal_size
+  const walMin = { web: 1024, oltp: 2048, dw: 4096, desktop: 100, mixed: 1024 };
+  const walMax = { web: 4096, oltp: 8192, dw: 16384, desktop: 2048, mixed: 4096 };
+  r.min_wal_size = `${walMin[dbType] || 1024}MB`;
+  r.max_wal_size = `${walMax[dbType] || 4096}MB`;
+
+  // Parallelism — only when we have at least 2 cores
+  if (cpuCount >= 2) {
+    r.max_worker_processes = String(cpuCount);
+    r.max_parallel_workers_per_gather = String(mpwpg);
+    r.max_parallel_workers = String(cpuCount);
+    r.max_parallel_maintenance_workers = String(mpwpg);
+  }
+
+  return r;
+}
+
+function formatKB(kb) {
+  if (kb >= 1024 * 1024 && kb % (1024 * 1024) === 0) return `${kb / (1024 * 1024)}GB`;
+  if (kb >= 1024 && kb % 1024 === 0)                 return `${kb / 1024}MB`;
+  if (kb >= 1024)                                    return `${(kb / 1024).toFixed(1)}MB`;
+  return `${kb}kB`;
+}
+
+/* Compare a current setting (as Postgres reports it) against a recommended
+ * value. Returns { same, currentNorm, recNorm } where the norms are
+ * canonicalized in kB where possible. Both values are loose-matched
+ * because the units in pg_settings can differ from pgtune output. */
+function compareSetting(current, currentUnit, recommended) {
+  const cur = parseSettingToKB(current, currentUnit);
+  const rec = parseSettingToKB(recommended);
+  if (cur != null && rec != null) {
+    const ratio = cur / rec;
+    return { same: ratio >= 0.85 && ratio <= 1.18, current, recommended };
+  }
+  // Fall back to string compare (case-insensitive)
+  return {
+    same: String(current).trim().toLowerCase() === String(recommended).trim().toLowerCase(),
+    current, recommended,
+  };
+}
+
+function parseSettingToKB(v, unit) {
+  if (v == null || v === '') return null;
+  // If we have an explicit unit, multiply
+  if (unit) {
+    const num = parseFloat(v);
+    if (!isFinite(num)) return null;
+    const u = unit.trim().toLowerCase();
+    const mult = { '8kb': 8, 'kb': 1, 'mb': 1024, 'gb': 1024 ** 2,
+                   'b': 1 / 1024, 'ms': null, 's': null, 'min': null };
+    if (mult[u] == null) return null;
+    return num * mult[u];
+  }
+  // Otherwise parse a string like "128MB" or "256kB"
+  const m = String(v).trim().match(/^([\d.]+)\s*(kb|mb|gb|tb|b)?$/i);
+  if (!m) return null;
+  const num = parseFloat(m[1]);
+  const u = (m[2] || 'kb').toLowerCase();
+  const mult = { 'b': 1 / 1024, 'kb': 1, 'mb': 1024, 'gb': 1024 ** 2, 'tb': 1024 ** 3 };
+  return num * (mult[u] || 1);
+}
+
 /* ###########################################################
  * #                                                         #
  * #            3. RENDER — builds the modern UI             #
@@ -1006,9 +1243,220 @@ function renderSectionDetail(s, issues) {
     </summary>
     <div class="section-body">${s.html}</div>
   `;
+  // Section-specific post-processing
+  const body = det.querySelector('.section-body');
+  if (s.anchor === 'DB_parameters' && Array.isArray(s.params) && s.params.length) {
+    decorateDbParams(body, s.params);
+  }
   // Add inline SVG bars to size-like columns inside this section's tables
-  decorateSizeColumns(det.querySelector('.section-body'));
+  decorateSizeColumns(body);
   return det;
+}
+
+/* ============================================================
+ * decorateDbParams — replaces the original 378-row × 17-column
+ * table with: a toolbar (search + non-default toggle + tuning
+ * button), a tuning form (collapsed by default), category-grouped
+ * collapsible param rows. The original raw table stays available
+ * via "Show raw table" toggle.
+ * ============================================================ */
+function decorateDbParams(scope, params) {
+  if (!scope || !params.length) return;
+  // Hide the original raw table; we'll keep it accessible via toggle.
+  const origTable = [...scope.querySelectorAll('table')].find(t => {
+    const hs = [...t.querySelectorAll('th')].map(th => th.textContent.trim().toLowerCase());
+    return hs.includes('name') && hs.includes('setting') && hs.includes('category');
+  });
+  if (origTable) origTable.classList.add('params-raw-table');
+
+  // Build toolbar + tuning panel + grouped list
+  const container = document.createElement('div');
+  container.innerHTML = `
+    <div class="params-toolbar">
+      <input type="search" id="params-search" placeholder="Search parameter name…">
+      <label class="toggle-lbl"><input type="checkbox" id="params-non-default"> Non-default only</label>
+      <button id="params-tune-btn" class="secondary">⚙ Suggest tuning</button>
+      <span class="params-stats"></span>
+    </div>
+    <div class="params-tune hidden" id="params-tune">
+      <h4>Tune for your system</h4>
+      <p style="font-size:.8rem;margin:.25rem 0 .85rem;color:var(--note-fg);opacity:.85">
+        Recommendations adapted from <a href="https://github.com/le0pard/pgtune" target="_blank" style="color:inherit;text-decoration:underline">le0pard/pgtune</a>.
+        These are starting points, not final answers — measure and adjust.
+      </p>
+      <div class="params-tune-form">
+        <div class="field"><label>RAM (GB)</label><input type="number" id="t-ram" min="0.5" step="0.5" value="8"></div>
+        <div class="field"><label>CPU cores</label><input type="number" id="t-cpu" min="1" step="1" value="4"></div>
+        <div class="field"><label>Workload</label><select id="t-type">
+          <option value="web">Web app</option>
+          <option value="oltp">OLTP</option>
+          <option value="mixed" selected>Mixed</option>
+          <option value="dw">Data warehouse</option>
+          <option value="desktop">Desktop</option>
+        </select></div>
+        <div class="field"><label>Storage</label><select id="t-storage">
+          <option value="ssd" selected>SSD</option>
+          <option value="hdd">HDD</option>
+          <option value="san">SAN</option>
+        </select></div>
+        <div class="field"><label>Max connections</label><input type="number" id="t-conn" min="1" step="1" placeholder="(by workload)"></div>
+      </div>
+      <div class="params-tune-actions">
+        <button id="t-apply">Compute & overlay on params</button>
+        <button id="t-clear" class="secondary">Clear</button>
+        <span id="t-status" style="font-size:.8rem;color:var(--note-fg);margin-left:.5rem"></span>
+      </div>
+    </div>
+    <div class="params-list" id="params-list"></div>
+    <div class="params-raw-toggle">
+      <button class="secondary" id="show-raw" style="font-size:.8rem;padding:.3rem .65rem;background:transparent;border:1px solid var(--border);border-radius:4px;color:var(--muted);cursor:pointer">Show raw table</button>
+    </div>
+  `;
+  // Insert before the (now hidden) raw table
+  if (origTable) scope.insertBefore(container, origTable);
+  else           scope.appendChild(container);
+
+  // Group params by category
+  const byCategory = new Map();
+  for (const p of params) {
+    const cat = p.category || 'Other';
+    if (!byCategory.has(cat)) byCategory.set(cat, []);
+    byCategory.get(cat).push(p);
+  }
+  // Stable sort: most non-default first, then alphabetical
+  const cats = [...byCategory.entries()].sort((a, b) => {
+    const nda = a[1].filter(p => p.source && p.source !== 'default').length;
+    const ndb = b[1].filter(p => p.source && p.source !== 'default').length;
+    if (nda !== ndb) return ndb - nda;
+    return a[0].localeCompare(b[0]);
+  });
+
+  const listEl = container.querySelector('#params-list');
+  const groupEls = [];
+  for (const [cat, items] of cats) {
+    const ndCount = items.filter(p => p.source && p.source !== 'default').length;
+    const grp = document.createElement('details');
+    grp.className = 'params-group';
+    grp.open = ndCount > 0;
+    const stamp = ndCount > 0 ? `<span class="gnondefault">${ndCount} non-default</span>` : '';
+    grp.innerHTML = `
+      <summary>
+        <span class="chev">›</span>
+        <span class="gname">${escapeHtml(cat)}</span>
+        ${stamp}
+        <span class="gcount">${items.length}</span>
+      </summary>
+      <div class="params-group-body"></div>
+    `;
+    const body = grp.querySelector('.params-group-body');
+    for (const p of items) {
+      body.appendChild(renderParamRow(p));
+    }
+    listEl.appendChild(grp);
+    groupEls.push({ el: grp, items });
+  }
+  updateStats(container, params, params);
+
+  // Wire toolbar
+  const searchEl   = container.querySelector('#params-search');
+  const ndToggle   = container.querySelector('#params-non-default');
+  const tuneBtn    = container.querySelector('#params-tune-btn');
+  const tunePanel  = container.querySelector('#params-tune');
+  const showRawBtn = container.querySelector('#show-raw');
+
+  const refilter = () => {
+    const q = searchEl.value.trim().toLowerCase();
+    const ndOnly = ndToggle.checked;
+    let visibleCount = 0;
+    for (const g of groupEls) {
+      let groupVisible = 0;
+      for (const row of g.el.querySelectorAll('.param-row')) {
+        const name = row.dataset.name || '';
+        const isDefault = row.dataset.default === '1';
+        const matches = (!q || name.includes(q)) && (!ndOnly || !isDefault);
+        row.classList.toggle('hidden', !matches);
+        if (matches) groupVisible++;
+      }
+      g.el.classList.toggle('hidden', groupVisible === 0);
+      if (groupVisible > 0 && (q || ndOnly)) g.el.open = true;
+      visibleCount += groupVisible;
+    }
+    container.querySelector('.params-stats').textContent =
+      `${visibleCount} / ${params.length} parameters`;
+  };
+
+  searchEl.addEventListener('input', refilter);
+  ndToggle.addEventListener('change', refilter);
+  tuneBtn.addEventListener('click', () => tunePanel.classList.toggle('hidden'));
+  if (showRawBtn && origTable) {
+    showRawBtn.addEventListener('click', () => {
+      origTable.classList.toggle('visible');
+      showRawBtn.textContent = origTable.classList.contains('visible')
+        ? 'Hide raw table' : 'Show raw table';
+    });
+  }
+
+  // Wire tuning form
+  const tApply = container.querySelector('#t-apply');
+  const tClear = container.querySelector('#t-clear');
+  const tStatus = container.querySelector('#t-status');
+  tApply.addEventListener('click', () => {
+    const opts = {
+      totalRamGB: parseFloat(container.querySelector('#t-ram').value) || 8,
+      cpuCount:   parseInt(container.querySelector('#t-cpu').value, 10) || 4,
+      dbType:     container.querySelector('#t-type').value,
+      storage:    container.querySelector('#t-storage').value,
+      connections: parseInt(container.querySelector('#t-conn').value, 10) || null,
+    };
+    const recs = pgtune(opts);
+    let applied = 0, divergent = 0;
+    for (const row of container.querySelectorAll('.param-row')) {
+      const oldTune = row.querySelector('.ptune');
+      if (oldTune) oldTune.remove();
+      const name = row.dataset.name;
+      if (!(name in recs)) continue;
+      const cmp = compareSetting(row.dataset.setting, row.dataset.unit, recs[name]);
+      const tag = document.createElement('span');
+      tag.className = 'ptune' + (cmp.same ? '' : ' divergent');
+      tag.textContent = cmp.same
+        ? `pgtune: ${recs[name]} (matches)`
+        : `pgtune suggests: ${recs[name]}`;
+      // Insert after the source badge column (last grid item before wrap)
+      row.appendChild(tag);
+      applied++;
+      if (!cmp.same) divergent++;
+    }
+    tStatus.textContent = `${applied} parameters covered, ${divergent} differ from current.`;
+  });
+  tClear.addEventListener('click', () => {
+    for (const t of container.querySelectorAll('.ptune')) t.remove();
+    tStatus.textContent = '';
+  });
+}
+
+function renderParamRow(p) {
+  const row = document.createElement('div');
+  row.className = 'param-row';
+  const isDefault = !p.source || p.source === 'default';
+  if (!isDefault) row.classList.add('non-default');
+  row.dataset.name = (p.name || '').toLowerCase();
+  row.dataset.setting = p.setting || '';
+  row.dataset.unit = p.unit || '';
+  row.dataset.default = isDefault ? '1' : '0';
+  const unitDisplay = p.unit ? ` <span class="unit">${escapeHtml(p.unit)}</span>` : '';
+  const desc = p.short_desc ? `<div class="pdesc">${escapeHtml(p.short_desc)}</div>` : '';
+  row.innerHTML = `
+    <span class="pname">${escapeHtml(p.name || '')}</span>
+    <span class="pvalue">${escapeHtml(p.setting || '')}${unitDisplay}</span>
+    <span class="psource ${isDefault ? '' : 'non-default'}">${escapeHtml(p.source || '?')}</span>
+    ${desc}
+  `;
+  return row;
+}
+
+function updateStats(container, all, visible) {
+  container.querySelector('.params-stats').textContent =
+    `${visible.length} / ${all.length} parameters`;
 }
 
 /* Detect tables whose columns contain Postgres-style size values
@@ -1272,6 +1720,9 @@ function loadFile(file) {
   r.onload = () => {
     try {
       const parsed = parseReport(r.result);
+      // Expose parsed data globally so future tooling (sqlite export,
+      // diff, CLI batch converter) can consume it without re-parsing.
+      window.pgcReport = parsed;
       render(parsed);
     } catch (e) {
       errEl.textContent = 'Could not parse: ' + e.message;
@@ -1307,6 +1758,7 @@ applyInitialTheme();
     const r = await fetch(url);
     if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
     const parsed = parseReport(await r.text());
+    window.pgcReport = parsed;
     render(parsed);
   } catch (e) {
     errEl.textContent = 'Failed to load ?report=' + url + ': ' + e.message;

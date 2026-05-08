@@ -563,26 +563,59 @@
   .section-body { padding: .25rem 1.35rem 1.5rem; overflow-x: auto;
                   border-top: 1px solid var(--border); }
 
-  /* Restyle psql tables (<table border="1">) — clean, generous padding */
+  /* Restyled psql tables — quiet, dense, sortable.
+   * Numeric columns are detected and right-aligned with tabular numerals
+   * and a monospaced font. Click any header to sort (asc → desc → unsorted).
+   */
   .section-body table {
-    border-collapse: separate; border-spacing: 0; margin: 1rem 0; font-size: .85rem;
-    border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden;
-    width: 100%; max-width: 100%;
-    background: var(--surface);
+    border-collapse: collapse; margin: 1rem 0; font-size: .82rem;
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    width: 100%; max-width: 100%; background: var(--surface);
+    table-layout: auto;
   }
   .section-body table th {
-    background: var(--surface-3); color: var(--text);
-    padding: .65rem .9rem; text-align: left; font-weight: 600; font-size: .76rem;
-    text-transform: uppercase; letter-spacing: .05em;
+    background: var(--surface-2); color: var(--muted);
+    padding: .5rem .85rem; text-align: left; font-weight: 600; font-size: .78rem;
     border-bottom: 1px solid var(--border);
     white-space: nowrap;
+    cursor: pointer; user-select: none; position: relative;
+    transition: color .12s ease, background .12s ease;
+  }
+  .section-body table th:hover { color: var(--text); background: var(--surface-3); }
+  .section-body table th::after {
+    content: ""; position: absolute; right: .55rem; top: 50%;
+    width: 0; height: 0; opacity: 0;
+    border-left: 4px solid transparent; border-right: 4px solid transparent;
+    transition: opacity .12s ease;
+  }
+  .section-body table th:hover::after { opacity: .35;
+    border-top: 5px solid var(--muted); margin-top: -2px; }
+  .section-body table th.sort-asc { color: var(--primary); background: var(--surface-3); }
+  .section-body table th.sort-asc::after {
+    opacity: 1; border-bottom: 5px solid var(--primary);
+    border-top: none; margin-top: -3px;
+  }
+  .section-body table th.sort-desc { color: var(--primary); background: var(--surface-3); }
+  .section-body table th.sort-desc::after {
+    opacity: 1; border-top: 5px solid var(--primary);
+    border-bottom: none; margin-top: -2px;
   }
   .section-body table td {
-    padding: .6rem .9rem; border-bottom: 1px solid var(--border);
-    text-align: left; word-break: break-word; vertical-align: top;
+    padding: .45rem .85rem; border-top: 1px solid var(--border);
+    text-align: left; word-break: break-word; vertical-align: baseline;
+    color: var(--text); font-size: .82rem; line-height: 1.4;
   }
-  .section-body table tr:last-child td { border-bottom: none; }
-  .section-body table tr:nth-child(even) td { background: var(--surface-2); }
+  .section-body table td.numeric {
+    text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-feature-settings: "tnum"; font-size: .8rem; white-space: nowrap;
+  }
+  .section-body table th.numeric { text-align: right; }
+  .section-body table th.numeric::after { left: .55rem; right: auto; }
+  .section-body table th.numeric:hover::after,
+  .section-body table th.numeric.sort-asc::after,
+  .section-body table th.numeric.sort-desc::after { left: .55rem; right: auto; }
+  .section-body table tr:first-child td { border-top: none; }
+  .section-body table tr:nth-child(even) td { background: var(--bg); }
   .section-body table tr:hover td { background: var(--note-bg); }
 
   .section-body h2, .section-body h3, .section-body h4 {
@@ -1393,9 +1426,137 @@ function renderSectionDetail(s, issues) {
   if (s.anchor === 'DB_parameters' && Array.isArray(s.params) && s.params.length) {
     decorateDbParams(body, s.params);
   }
+  // Make every <table> sortable + auto-detect numeric columns
+  decorateTables(body);
   // Add inline SVG bars to size-like columns inside this section's tables
   decorateSizeColumns(body);
   return det;
+}
+
+/* ============================================================
+ * decorateTables — for every <table> in scope:
+ *   1. Detect numeric columns (numbers, sizes, durations) and
+ *      add a `numeric` class so CSS right-aligns them.
+ *   2. Make headers click-to-sort (asc → desc → original order).
+ *   3. Sort comparator is type-aware: numeric/size/time first,
+ *      string fallback (locale-aware, case-insensitive).
+ * ============================================================ */
+function decorateTables(scope) {
+  if (!scope) return;
+  for (const tbl of scope.querySelectorAll('table')) {
+    if (tbl.classList.contains('params-raw-table')) continue; // hidden anyway
+    const headers = [...tbl.querySelectorAll('th')];
+    if (headers.length === 0) continue;
+    // Collect data rows (everything after the header row)
+    const allRows = [...tbl.querySelectorAll('tr')];
+    const headerRow = headers[0].closest('tr');
+    const headerRowIdx = allRows.indexOf(headerRow);
+    const dataRows = allRows.slice(headerRowIdx + 1).filter(r => r.children.length > 0);
+    if (dataRows.length === 0) continue;
+
+    // Cache original order for the third click ("unsorted")
+    dataRows.forEach((r, i) => { r.dataset.origIdx = i; });
+
+    // Detect numeric columns (every cell parseable as numeric, ignoring blanks)
+    headers.forEach((th, idx) => {
+      let numericHits = 0, blankHits = 0, total = dataRows.length;
+      for (const r of dataRows) {
+        const cell = r.children[idx];
+        if (!cell) { blankHits++; continue; }
+        const t = (cell.textContent || '').trim();
+        if (t === '' || t === ' ') { blankHits++; continue; }
+        if (parseNumeric(t) != null) numericHits++;
+      }
+      const nonBlank = total - blankHits;
+      const isNumeric = nonBlank > 0 && (numericHits / nonBlank) >= 0.85;
+      if (isNumeric) {
+        th.classList.add('numeric');
+        for (const r of dataRows) {
+          const c = r.children[idx];
+          if (c) c.classList.add('numeric');
+        }
+      }
+      th.dataset.colIdx = String(idx);
+      th.dataset.sortState = 'none';
+      th.title = 'Click to sort';
+      th.addEventListener('click', () => sortTable(tbl, idx));
+    });
+  }
+}
+
+function sortTable(tbl, colIdx) {
+  const headers = [...tbl.querySelectorAll('th')];
+  const allRows = [...tbl.querySelectorAll('tr')];
+  const headerRow = headers[0].closest('tr');
+  const headerRowIdx = allRows.indexOf(headerRow);
+  const dataRows = allRows.slice(headerRowIdx + 1).filter(r => r.children.length > 0);
+  if (dataRows.length === 0) return;
+
+  const th = headers[colIdx];
+  const cycle = { 'none': 'asc', 'asc': 'desc', 'desc': 'none' };
+  const newState = cycle[th.dataset.sortState] || 'asc';
+
+  for (const h of headers) {
+    h.classList.remove('sort-asc', 'sort-desc');
+    h.dataset.sortState = 'none';
+  }
+
+  if (newState === 'none') {
+    dataRows.sort((a, b) => +a.dataset.origIdx - +b.dataset.origIdx);
+  } else {
+    th.classList.add('sort-' + newState);
+    th.dataset.sortState = newState;
+    const direction = (newState === 'asc') ? 1 : -1;
+    dataRows.sort((a, b) => {
+      const av = (a.children[colIdx]?.textContent || '').trim();
+      const bv = (b.children[colIdx]?.textContent || '').trim();
+      return direction * compareCells(av, bv);
+    });
+  }
+
+  // Re-attach in new order. parentNode handles the case where rows are
+  // direct children of the table or nested in a tbody.
+  const parent = dataRows[0].parentNode;
+  for (const r of dataRows) parent.appendChild(r);
+}
+
+function compareCells(a, b) {
+  // Empty cells sort last
+  const ae = !a || a === ' ';
+  const be = !b || b === ' ';
+  if (ae && be) return 0;
+  if (ae) return 1;
+  if (be) return -1;
+  // Try numeric
+  const an = parseNumeric(a);
+  const bn = parseNumeric(b);
+  if (an != null && bn != null) return an - bn;
+  // String compare
+  return a.toLowerCase().localeCompare(b.toLowerCase(), undefined, { numeric: true });
+}
+
+/* parseNumeric: parse a cell's text as a number with optional unit.
+ * Recognized units: bytes/b, kB/MB/GB/TB/PB, ms/s/min/hour/h.
+ * Returns canonical number (bytes for sizes, ms for durations,
+ * raw value otherwise) or null if not parseable. */
+function parseNumeric(s) {
+  if (s == null) return null;
+  s = String(s).trim();
+  if (!s) return null;
+  // Boolean-ish (t/f from psql)
+  if (/^[tf]$/i.test(s)) return s.toLowerCase() === 't' ? 1 : 0;
+  // Match: optional sign, digits with possible commas/dots, optional unit
+  const m = s.match(/^(-?[\d,]*\.?\d+(?:e[+-]?\d+)?)\s*(bytes|byte|b|kb|mb|gb|tb|pb|ms|s|min|mins|hr|hrs|hour|hours|h)?$/i);
+  if (!m) return null;
+  const num = parseFloat(m[1].replace(/,/g, ''));
+  if (!isFinite(num)) return null;
+  const u = (m[2] || '').toLowerCase();
+  const sizeMult = { '':1,'b':1,'byte':1,'bytes':1,
+                     'kb':1024,'mb':1024**2,'gb':1024**3,'tb':1024**4,'pb':1024**5 };
+  const timeMult = { 'ms':1,'s':1000,'min':60000,'mins':60000,
+                     'hr':3600000,'hrs':3600000,'hour':3600000,'hours':3600000,'h':3600000 };
+  const mult = sizeMult[u] != null ? sizeMult[u] : (timeMult[u] != null ? timeMult[u] : 1);
+  return num * mult;
 }
 
 /* ============================================================

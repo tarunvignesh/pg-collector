@@ -1029,22 +1029,55 @@ function extractObservations(doc) {
   const obsHeader = fonts.find(f => /^observations\s*$/i.test(f.textContent.trim()));
   const obs = [];
   if (obsHeader) {
-    let node = obsHeader.parentNode.nextSibling;
-    while (node) {
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        if (node.tagName === 'A' && node.getAttribute('name')) break;
-        const txt = (node.textContent || '').trim();
-        if (txt.startsWith('→') || txt.startsWith('→')) {
-          const linkEl = node.querySelector ? node.querySelector('a[href^="#"]') : null;
-          obs.push({
-            text: txt,
-            link: linkEl ? linkEl.getAttribute('href') : null,
-            linkLabel: linkEl ? linkEl.textContent : null,
-          });
-        }
+    // Same cross-tree problem the section parser hits: psql emits <p>(N rows)</p>
+    // after result tables, so the HTML5 parser nests everything after the first
+    // <p> inside it. The observation lines are therefore NOT siblings of the
+    // Observations header -- walking nextSibling finds nothing and silently
+    // drops every finding onto the regex fallback below. Use a Range, which
+    // traverses across the tree, exactly as extractSections() does.
+    const stop = [...doc.querySelectorAll('a[name]')].find(a =>
+      a.compareDocumentPosition(obsHeader) & Node.DOCUMENT_POSITION_PRECEDING);
+
+    const range = doc.createRange();
+    range.setStartAfter(obsHeader);
+    if (stop) range.setEndBefore(stop);
+    else      range.setEndAfter(doc.body.lastChild);
+
+    const wrap = doc.createElement('div');
+    wrap.appendChild(range.cloneContents());
+
+    // The observation lines have no per-line wrapper element to hang off --
+    // psql emits them as loose text separated by <br>, so closest() would
+    // return the fragment itself for every link and collapse all findings into
+    // one. Walk the fragment in document order instead and start a new
+    // observation at each arrow, attaching the first #anchor link that follows.
+    const walker = doc.createTreeWalker(wrap, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+    let cur = null;
+    const flush = () => {
+      if (cur && cur.text.trim()) {
+        cur.text = ('→ ' + cur.text.trim()).replace(/\s+/g, ' ');
+        obs.push(cur);
       }
-      node = node.nextSibling;
+      cur = null;
+    };
+    while (walker.nextNode()) {
+      const n = walker.currentNode;
+      if (n.nodeType === Node.ELEMENT_NODE) {
+        if (cur && !cur.link && n.tagName === 'A' &&
+            (n.getAttribute('href') || '').startsWith('#')) {
+          cur.link = n.getAttribute('href');
+          cur.linkLabel = n.textContent;  // textContent: entities already decoded
+        }
+        continue;
+      }
+      const parts = (n.nodeValue || '').split('→');
+      if (cur) cur.text += parts[0];
+      for (let k = 1; k < parts.length; k++) {
+        flush();
+        cur = { text: parts[k], link: null, linkLabel: null };
+      }
     }
+    flush();
   }
   // Fallback: scan body HTML for arrow-prefixed observation patterns
   if (obs.length === 0) {
@@ -1052,14 +1085,26 @@ function extractObservations(doc) {
     const rx = /→\s*([^<]+?)\s*<a[^>]+href="(#[^"]+)"[^>]*>([^<]+)<\/a>\s*\./g;
     let m;
     while ((m = rx.exec(bodyHtml))) {
+      // These come from raw innerHTML, so entities are still encoded. Decoding
+      // is required or escapeHtml() at render time double-escapes them and the
+      // user sees a literal "Vacuum &amp; Statistics".
       obs.push({
-        text: `→ ${m[1].trim()} ${m[3]} .`,
+        text: `→ ${decodeEntities(m[1].trim())} ${decodeEntities(m[3])} .`,
         link: m[2],
-        linkLabel: m[3],
+        linkLabel: decodeEntities(m[3]),
       });
     }
   }
   return obs;
+}
+
+// Decode HTML entities in a text run. DOMParser neither executes script nor
+// touches the live DOM, so this is safe on untrusted report content; the
+// result is re-escaped by escapeHtml() before it is rendered.
+function decodeEntities(str) {
+  if (!str || str.indexOf('&') === -1) return str;
+  const d = new DOMParser().parseFromString(str, 'text/html');
+  return d.documentElement.textContent || str;
 }
 
 function extractSections(doc) {

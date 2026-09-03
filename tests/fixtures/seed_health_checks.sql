@@ -1,9 +1,23 @@
 -- seed_health_checks.sql — trigger each PG Collector Observations check.
 --
--- Runs as a superuser; manipulates `pg_catalog` rows and `ALTER SYSTEM` to
--- force every check in the v3.2 health-check list into the "warn" state.
--- Checks that cannot be reliably tripped in a CI-speed window are
--- documented inline as `unreachable in CI`.
+-- Runs as a superuser; manipulates `pg_catalog` rows and GUCs to force every
+-- check in the health-check list into the "warn" state. Checks that cannot be
+-- reliably tripped in a CI-speed window are documented inline as
+-- `unreachable in CI`.
+--
+-- Scope matters here. `ALTER SYSTEM` writes postgresql.auto.conf, which is
+-- cluster-wide and survives `dropdb` -- so it leaks out of run.sh --isolate's
+-- temporary database and permanently reconfigures the caller's cluster. Worse,
+-- a leaked `track_counts = off` silently breaks the *next* run: no tuple stats
+-- accumulate, so the dead-rows check can never fire again.
+--
+-- Every GUC whose context is `user` or `superuser` is therefore set with
+-- `ALTER DATABASE`, which dropdb removes with the database. Only `autovacuum`
+-- (context `sighup`) genuinely needs `ALTER SYSTEM`; run.sh resets that one
+-- explicitly on exit.
+--
+-- `ALTER DATABASE ... SET` applies to *new* sessions, not this one, so the
+-- seeding below still runs with counters enabled.
 --
 -- Depends on seed_common.sql.
 
@@ -29,6 +43,8 @@ UPDATE pg_index
 -- above has zero scans; so does `events_kind_dup_b`. No extra action needed.
 
 -- ---------- 4. autovacuum disabled ----------
+-- context 'sighup': ALTER DATABASE cannot set it, so this one is cluster-wide.
+-- run.sh's --isolate trap runs `ALTER SYSTEM RESET autovacuum` on exit.
 ALTER SYSTEM SET autovacuum = 'off';
 
 -- ---------- 5. Sequences with <10% remaining ----------
@@ -44,11 +60,11 @@ SELECT setval('pgc_fixture.near_wrap', 95);
 -- Default in the CI Postgres container (no SSL configured). Always trips.
 
 -- ---------- 8. enable_indexonlyscan disabled ----------
-ALTER SYSTEM SET enable_indexonlyscan = 'off';
+ALTER DATABASE :"DBNAME" SET enable_indexonlyscan = 'off';
 
 -- ---------- 9. Excessive logging parameters ----------
-ALTER SYSTEM SET log_statement = 'all';
-ALTER SYSTEM SET log_min_duration_statement = 0;
+ALTER DATABASE :"DBNAME" SET log_statement = 'all';
+ALTER DATABASE :"DBNAME" SET log_min_duration_statement = 0;
 
 -- ---------- 10. track_counts disabled ----------
 -- Deliberately deferred to after #14 (dead rows). Disabling track_counts
@@ -56,10 +72,10 @@ ALTER SYSTEM SET log_min_duration_statement = 0;
 -- happen first. See end of this file.
 
 -- ---------- 11. enable_indexscan disabled ----------
-ALTER SYSTEM SET enable_indexscan = 'off';
+ALTER DATABASE :"DBNAME" SET enable_indexscan = 'off';
 
 -- ---------- 12. synchronous_commit off ----------
-ALTER SYSTEM SET synchronous_commit = 'off';
+ALTER DATABASE :"DBNAME" SET synchronous_commit = 'off';
 
 -- ---------- 13. Invalid databases ----------
 -- Marking a database invalid requires datconnlimit manipulation on recent PG
@@ -125,8 +141,9 @@ SELECT pg_reload_conf();
 SELECT pg_sleep(1);
 
 -- ---------- Now disable track_counts (observation #10) ----------
--- Existing pg_stat_* values survive; new updates stop incrementing.
-ALTER SYSTEM SET track_counts = 'off';
-SELECT pg_reload_conf();
+-- Existing pg_stat_* values survive; new updates stop incrementing. Database
+-- scope, so this takes effect for the pg_collector session that connects next
+-- -- no reload needed -- and goes away with the database.
+ALTER DATABASE :"DBNAME" SET track_counts = 'off';
 
 \echo Applied health-check triggers. Some settings need a new session to take effect.

@@ -79,8 +79,14 @@ if [[ "$ISOLATE" -eq 1 ]]; then
         exit 1
     fi
     export PGDATABASE="$TMP_DB"
+    # seed_health_checks.sql scopes its GUCs to the database wherever the
+    # context allows, so dropdb removes them. `autovacuum` is context 'sighup'
+    # and can only be set cluster-wide, so reset it here or --isolate leaves
+    # the caller's cluster with autovacuum off. Reset before dropdb: the
+    # reset targets the cluster, not the database, and must run even if
+    # dropdb fails.
     # shellcheck disable=SC2064
-    trap "echo '>>> --isolate: dropping $TMP_DB...'; dropdb --if-exists --maintenance-db='$MAINT_DB' '$TMP_DB' >/dev/null 2>&1 || true" EXIT INT TERM
+    trap "echo '>>> --isolate: resetting cluster-scoped GUCs...'; psql -qAt -d '$MAINT_DB' -c 'ALTER SYSTEM RESET autovacuum' >/dev/null 2>&1 || true; psql -qAt -d '$MAINT_DB' -c 'SELECT pg_reload_conf()' >/dev/null 2>&1 || true; echo '>>> --isolate: dropping $TMP_DB...'; dropdb --if-exists --maintenance-db='$MAINT_DB' '$TMP_DB' >/dev/null 2>&1 || true" EXIT INT TERM
 fi
 
 echo ">>> pg_collector test runner"

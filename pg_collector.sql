@@ -921,6 +921,7 @@ select count(*) > 0 isauroralimitless from pg_catalog.pg_extension where extname
 -- +----------------------------------------------------------------------------+
 -- |      - observations                                                     -  |
 -- +----------------------------------------------------------------------------+
+\qecho <a name="observations"></a>
 \qecho <font size="+2" face="Arial,Helvetica,Geneva,sans-serif" color="#16191f"><b>Observations</b></font><hr align="left" width="460">
 ---------------------------------
 -- Check for duplicate indexes --

@@ -264,7 +264,9 @@ For CI runs, these are uploaded as workflow artifacts named
   package or ship only one version. When that happens, the outdated-
   extensions observation won't fire in CI. That's fine — we don't treat
   it as required.
-- **PG versioning policy**: this repo's `main` branch targets PG12-and-
-  older per the project's branching policy; the test matrix runs against
-  PG12–17. Failures on newer majors aren't necessarily merge-blockers on
-  this branch; they're early warnings for the per-major branches.
+- **PG versioning policy**: this branch targets PG19 per the project's
+  branch-per-major policy, so the matrix runs PG17, PG18 and PG19beta3 —
+  the target plus the two majors below it, which are what exercise the
+  `extversion` gates guarding PG15-18-only catalog columns. All three are
+  merge-blockers here; `main` (PG12-and-older) keeps its own wider,
+  advisory matrix.

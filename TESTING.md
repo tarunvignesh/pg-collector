@@ -169,28 +169,35 @@ The repo follows a branch-per-major model: `main` targets PG12 and
 older; each `pg_major: 13+` has its own branch. Each branch carries
 the version-specific catalog/syntax workarounds.
 
-This branch's CI matrix runs the runtime harness against **PG12 through
-PG18** (7 majors × pgss on/off × seed empty/populated × aurora
-none/mocked = 56 cells). That's intentionally broader than this
-branch's strict PG12-and-older target — failures on PG13+ here are
-early-warning signals for the per-major branches, not strict
-merge-blockers on `main`.
+**This branch targets PG19**, so its CI matrix runs the runtime harness
+against **17, 18 and 19beta3** (3 majors × pgss on/off × seed
+empty/populated × aurora none/mocked = 24 cells). PG19 has no GA tag on
+Docker Hub yet, hence `19beta3`.
+
+The range is narrower than `main`'s deliberately. The PG19 script reads
+catalog columns introduced across PG15-18 — `pg_parameter_acl`,
+`wal_buffers_full`, `parallel_workers_to_launch`, `generic_plan_calls` —
+and only its `extversion` gates keep those queries off older servers.
+The 17 and 18 legs are what exercise those gates; adding PG12-14 legs
+would mostly re-test the same gate logic against servers this branch was
+never meant to run on.
 
 | Branch | Strict target | What CI tests on PR |
 |---|---|---|
-| `main` | PG12 and older | PG12-PG18 (this matrix) |
+| `main` | PG12 and older | PG12-PG18 |
+| this branch (`pg19`) | PG19 | PG17, PG18, PG19beta3 |
 | `pg13`, `pg14`, … (separate) | The named major | Each branch maintains its own scoped matrix |
 
 The single-version pytest **`report` job** (the one rendered in the PR
-Checks UI) runs against PG17 — a deliberately conservative
-"representative stable" rather than the bleeding edge. The matrix
-catches version-specific regressions; the report surfaces test-suite
-results.
+Checks UI) runs against 19beta3 — the branch's own target, so the
+surfaced results describe the server the script is actually for. The
+matrix catches version-specific regressions; the report surfaces
+test-suite results.
 
 When PG19 GA's, the maintainer should:
-1. Append `19` to the matrix `pg_major:` list.
-2. Decide whether to drop the oldest EOL'd major (currently PG12).
-3. Update this section to reflect the change.
+1. Replace `19beta3` with `19` in the matrix `pg_major:` list and in the
+   `report` job's service image.
+2. Update this section to reflect the change.
 
 ## Generating a report
 

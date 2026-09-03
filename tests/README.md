@@ -98,12 +98,12 @@ Open `tests/artifacts/test-report/test_report.html` in a browser.
 ### CI
 
 GitHub Actions runs two jobs on every PR:
-- **`pytest report (pg17)`** — invokes the pytest wrapper above against
-  PG17, publishes JUnit results to the PR Checks UI via
+- **`pytest report (pg19beta3)`** — invokes the pytest wrapper above against
+  PG19beta3, publishes JUnit results to the PR Checks UI via
   `EnricoMi/publish-unit-test-result-action`, and uploads the
   self-contained HTML report as a workflow artifact named `test-report`.
-- **`matrix-test`** — the cross-version compatibility sweep (PG12–17 ×
-  pgss on/off × seed empty/populated × aurora none/mocked = 48 cells)
+- **`matrix-test`** — the cross-version compatibility sweep (PG17–19beta3 ×
+  pgss on/off × seed empty/populated × aurora none/mocked = 24 cells)
   using `run.sh` directly. Each cell uploads its own pg_collector
   output as an artifact.
 

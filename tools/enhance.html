@@ -862,16 +862,27 @@ const RUBRIC = [
  *
  * To remove grouping entirely (flat list), set this to [].
  * ----------------------------------------------------------------- */
+// Anchor names differ between upstream branches (main/PG12 vs the per-major
+// branches), and a section can be renamed between releases -- Temp_tables
+// became Temp_tables_files in the 2026-06 release. Entries that match nothing
+// in the loaded report are filtered out at render time, so listing both the
+// old and new name keeps one viewer working across every branch's reports.
 const SECTION_GROUPS = [
+  { label: 'Health', sections: [
+      'observations',
+  ]},
   { label: 'Storage', sections: [
       'Database_size', 'Table_Size', 'index_Size', 'Tablespaces_Info',
-      'Toast_Tables_Mapping', 'Temp_tables', 'Large_objects',
-      'unlogged_tables', 'Partition_tables',
+      'Toast_Tables_Mapping', 'Temp_tables', 'Temp_tables_files',
+      'Large_objects', 'unlogged_tables', 'Partition_tables',
   ]},
   { label: 'Performance', sections: [
       'pg_stat_statements_extension', 'table_Access_Profile',
       'Index_Access_Profile', 'Unused Indexes', 'DB_Load',
       'functions_statistics', 'Memory_setting',
+      'Index_Creation_Progress', 'COPY_command_progress',
+      // v2.x-era names, incl. the upstream 'Tabel_' typo.
+      'Unused_Indexes', 'Tabel_Access_Profile',
   ]},
   { label: 'Vacuum & wraparound', sections: [
       'vacuum_Statistics', 'Fragmentation',
@@ -879,12 +890,14 @@ const SECTION_GROUPS = [
   ]},
   { label: 'Replication & sessions', sections: [
       'Replication', 'sessions_info', 'background_processes',
+      // v2.x-era names.
+      'Replication_slot', 'active_session_monitor',
   ]},
   { label: 'Schema', sections: [
       'Schema_Info', 'public_Schema', 'invalid_indexes',
       'Duplicate_indexes', 'FK_without_index',
       'PK_FK_using_numeric_or_integer_data_type',
-      'sequences', 'triggers',
+      'sequences', 'triggers', 'Materialized_Views',
   ]},
   { label: 'Security & access', sections: [
       'Users_Roles_Info', 'access_privileges', 'default_access_privileges',
@@ -893,14 +906,18 @@ const SECTION_GROUPS = [
   { label: 'Configuration', sections: [
       'DB_parameters', 'Extensions', 'pg_config',
       'pgaudit_extension', 'pg_shdepend', 'Invalid_databases',
+      'Foreign_Servers',
   ]},
   { label: 'Aurora', sections: [
+      'Aurora_version', 'Aurora_PostgreSQL_built-in_functions',
+      'Aurora_db_instance_identifier', 'Aurora_cluster_instances',
       'Aurora_reader_instances-Replica_Lag',
       'Aurora_cluster_cache_management_(CCM)',
       'Aurora_global_db_status', 'Aurora_wait_event_stat',
       'query_plan_management', 'Aurora_dml_activity',
       'process_memory_context_usage',
       'logical_replication_write_through_cache',
+      'aurora_stat_statements', 'aurora_stat_plans',
   ]},
 ];
 

@@ -178,22 +178,43 @@ def check_observations(
 
 
 def check_aurora(report_text: str, mode: str, errors: list[str]) -> None:
-    soup = BeautifulSoup(report_text, "html.parser")
-    # Heuristic: find content between Aurora-section anchors and check for the
-    # "not Aurora" banner.
-    aurora_section_hits = report_text.lower().count("this is not aurora instance")
+    """Assert the Aurora gate resolved the way the environment demands.
+
+    Two upstream renderings of a non-Aurora run exist and both are correct:
+
+    * `main` (PG12) wraps each Aurora block in `\\if :isaurora ... \\else`
+      and prints a 'This is not Aurora instance' placeholder.
+    * The PG19-era branches dropped the `\\else` arms, so the sections and
+      their TOC entries are omitted from the report entirely.
+
+    Keying on the placeholder string alone therefore fails on PG19 for a
+    report that is perfectly correct. What actually matters in both is
+    whether Aurora *content* rendered, so that is what we assert.
+    """
+    banner_hits = report_text.lower().count("this is not aurora instance")
+    anchors = {a.lower() for a in NAME_RE.findall(report_text)}
+    aurora_anchors = sorted(a for a in anchors if "aurora" in a or "limitless" in a)
+
     if mode == "mocked":
-        if aurora_section_hits > 0:
+        if banner_hits > 0:
             fail(
-                f"aurora=mocked: still found 'This is not Aurora instance' "
-                f"{aurora_section_hits}x — stubs did not engage",
+                f"aurora=mocked: found 'This is not Aurora instance' "
+                f"{banner_hits}x — stubs did not engage",
+                errors,
+            )
+        if not aurora_anchors:
+            fail(
+                "aurora=mocked: no Aurora section anchors rendered — "
+                "stubs did not engage",
                 errors,
             )
     elif mode == "none":
-        if aurora_section_hits == 0:
+        # Placeholder banners (main) and omitted sections (PG19) both pass;
+        # Aurora sections that actually rendered do not.
+        if aurora_anchors and banner_hits == 0:
             fail(
-                "aurora=none: expected 'This is not Aurora instance' banners, "
-                "found none",
+                f"aurora=none: Aurora sections rendered on a non-Aurora "
+                f"server: {aurora_anchors[:5]}",
                 errors,
             )
 

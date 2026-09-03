@@ -29,27 +29,36 @@ GRANT USAGE ON SCHEMA pgc_aurora_mock TO PUBLIC;
 -- appear in pg_catalog.pg_settings on modern Postgres unless a C extension
 -- registers them via DefineCustomStringVariable. A view in an earlier
 -- search_path entry is the lightest mock that makes the Aurora branch fire.
+-- The injected row lives in a real table rather than a constant SELECT.
+-- A `SELECT 'aurora_stat_utils'::text ...` with no FROM plans as a Result
+-- node, so the planner constant-folds any cast applied to it — and the
+-- script casts settings to bigint (e.g. the autovacuum_freeze_max_age
+-- health check does `setting::bigint > 200000000`). Folding runs at plan
+-- time, before the `name = '...'` qual can exclude this row, so the whole
+-- statement aborts with `invalid input syntax for type bigint`. Reading
+-- from a table makes it a scan whose quals are ordered by cost, matching
+-- how pg_catalog.pg_settings (a set-returning-function view) behaves.
+CREATE TABLE IF NOT EXISTS pgc_aurora_mock.injected_settings (
+    LIKE pg_catalog.pg_settings
+);
+
+TRUNCATE pgc_aurora_mock.injected_settings;
+INSERT INTO pgc_aurora_mock.injected_settings
+    (name, setting, unit, category, short_desc, extra_desc, context,
+     vartype, source, min_val, max_val, enumvals, boot_val, reset_val,
+     sourcefile, sourceline, pending_restart)
+VALUES
+    ('rds.extensions', 'aurora_stat_utils', 'kB', 'Customized Options',
+     'Mock for Aurora detection', NULL, 'user', 'string', 'default',
+     NULL, NULL, NULL, 'aurora_stat_utils', 'aurora_stat_utils',
+     NULL, NULL, false);
+
+GRANT SELECT ON pgc_aurora_mock.injected_settings TO PUBLIC;
+
 CREATE OR REPLACE VIEW pgc_aurora_mock.pg_settings AS
 SELECT * FROM pg_catalog.pg_settings
 UNION ALL
-SELECT
-    'rds.extensions'::text                        AS name,
-    'aurora_stat_utils'::text                     AS setting,
-    'kB'::text                                    AS unit,
-    'Customized Options'::text                    AS category,
-    'Mock for Aurora detection'::text             AS short_desc,
-    NULL::text                                    AS extra_desc,
-    'user'::text                                  AS context,
-    'string'::text                                AS vartype,
-    'default'::text                               AS source,
-    NULL::text                                    AS min_val,
-    NULL::text                                    AS max_val,
-    NULL::text[]                                  AS enumvals,
-    'aurora_stat_utils'::text                     AS boot_val,
-    'aurora_stat_utils'::text                     AS reset_val,
-    NULL::text                                    AS sourcefile,
-    NULL::int                                     AS sourceline,
-    false                                         AS pending_restart;
+SELECT * FROM pgc_aurora_mock.injected_settings;
 
 GRANT SELECT ON pgc_aurora_mock.pg_settings TO PUBLIC;
 
@@ -74,8 +83,13 @@ RETURNS TABLE (name text, description text) LANGUAGE sql AS
 $$ SELECT NULL::text, NULL::text WHERE false $$;
 
 -- ---------- aurora_db_instance_identifier ----------
+-- Returns a scalar, matching real Aurora. Declaring it RETURNS TABLE
+-- (server_id text) gave the result a column of its own named server_id, so
+-- the replica-status join `FROM aurora_replica_status() rt,
+-- aurora_db_instance_identifier() di WHERE rt.server_id = di` failed with
+-- "column reference server_id is ambiguous".
 CREATE OR REPLACE FUNCTION pgc_aurora_mock.aurora_db_instance_identifier()
-RETURNS TABLE (server_id text) LANGUAGE sql AS
+RETURNS text LANGUAGE sql AS
 $$ SELECT 'mock-aurora-instance-1'::text $$;
 
 -- ---------- aurora_replica_status ----------
@@ -86,6 +100,7 @@ RETURNS TABLE (
     highest_lsn_rcvd text,
     current_read_lsn text,
     last_update_timestamp timestamptz,
+    replica_lag_in_msec double precision,
     durability_lag_in_msec bigint,
     feedback_xmin text,
     feedback_epoch bigint,
@@ -93,6 +108,7 @@ RETURNS TABLE (
     active_lsn text
 ) LANGUAGE sql AS
 $$ SELECT NULL::text, NULL::text, NULL::text, NULL::text, NULL::timestamptz,
+         NULL::double precision,
          NULL::bigint, NULL::text, NULL::bigint, NULL::bigint, NULL::text
    WHERE false $$;
 
@@ -161,6 +177,56 @@ RETURNS TABLE (
     cache_misses bigint
 ) LANGUAGE sql AS
 $$ SELECT NULL::bigint, NULL::bigint, NULL::bigint WHERE false $$;
+
+-- ---------- aurora_stat_statements ----------
+-- Added upstream in the 2026-06 release ("Aurora pg_stat_statements"
+-- section). Same shape as pg_stat_statements plus Aurora's storage-layer
+-- counters (storage_blks_read, orcache_blks_hit).
+CREATE OR REPLACE FUNCTION pgc_aurora_mock.aurora_stat_statements()
+RETURNS TABLE (
+    queryid bigint,
+    query text,
+    calls bigint,
+    rows bigint,
+    total_exec_time double precision,
+    mean_exec_time double precision,
+    stddev_exec_time double precision,
+    shared_blks_read bigint,
+    storage_blks_read bigint,
+    orcache_blks_hit bigint
+) LANGUAGE sql AS
+$$ SELECT NULL::bigint, NULL::text, NULL::bigint, NULL::bigint,
+          NULL::double precision, NULL::double precision,
+          NULL::double precision,
+          NULL::bigint, NULL::bigint, NULL::bigint
+   WHERE false $$;
+
+-- ---------- aurora_stat_plans ----------
+-- Added upstream in the 2026-06 release ("Aurora stat plans" section).
+CREATE OR REPLACE FUNCTION pgc_aurora_mock.aurora_stat_plans()
+RETURNS TABLE (
+    queryid bigint,
+    planid bigint,
+    dbid oid,
+    query text,
+    explain_plan text,
+    plan_type text,
+    plan_captured_time timestamptz,
+    calls bigint,
+    rows bigint,
+    total_exec_time double precision,
+    mean_exec_time double precision,
+    stddev_exec_time double precision,
+    shared_blks_read bigint,
+    storage_blks_read bigint,
+    orcache_blks_hit bigint
+) LANGUAGE sql AS
+$$ SELECT NULL::bigint, NULL::bigint, NULL::oid, NULL::text, NULL::text,
+          NULL::text, NULL::timestamptz, NULL::bigint, NULL::bigint,
+          NULL::double precision, NULL::double precision,
+          NULL::double precision,
+          NULL::bigint, NULL::bigint, NULL::bigint
+   WHERE false $$;
 
 -- ---------- Grants ----------
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgc_aurora_mock TO PUBLIC;

@@ -19,6 +19,11 @@ Rules
 7. `PREPARE ... AS <body>` is allowed only if <body> starts with SELECT / WITH
    / VALUES. `EXECUTE <name>` is allowed only if <name> was previously
    introduced by an allowed PREPARE.
+8. `SET` / `RESET` are write-class by default, but a session-scoped assignment
+   to a GUC in SAFE_SESSION_GUCS is allowed: it changes only this backend's
+   behaviour and touches no data. `SET ROLE`, `SET SESSION AUTHORIZATION`,
+   `SET CONSTRAINTS`, `SET TRANSACTION` and `RESET ALL` stay rejected because
+   they change the security or transaction context rather than a tunable.
 """
 
 from __future__ import annotations
@@ -41,6 +46,24 @@ WRITE_KEYWORDS = frozenset({
     "SECURITY",
     "IMPORT",
 })
+
+# GUCs the script may set on its own session. Each one only affects how this
+# backend executes the collector's own read-only queries; none can alter data
+# or outlive the session. Upstream added `SET statement_timeout` in the
+# 2026-06 release so a slow catalog query cancels instead of hanging the run.
+SAFE_SESSION_GUCS = frozenset({
+    "statement_timeout",
+    "lock_timeout",
+    "idle_in_transaction_session_timeout",
+})
+
+# `SET [SESSION|LOCAL] <name> ...` / `RESET [SESSION|LOCAL] <name>`.
+# Anything that is not a bare GUC name (ROLE, SESSION AUTHORIZATION,
+# CONSTRAINTS, TRANSACTION, TIME ZONE, ALL) fails the allowlist lookup.
+SET_TARGET_RE = re.compile(
+    r"^(?:SET|RESET)\s+(?:SESSION\s+|LOCAL\s+)?([A-Za-z_][A-Za-z0-9_.]*)",
+    re.IGNORECASE,
+)
 
 SIDE_EFFECT_FUNCTIONS = frozenset({
     "pg_stat_reset",
@@ -85,29 +108,45 @@ def tokenize(text: str) -> list[tuple[int, str]]:
     line = 1
     buf: list[str] = []
     buf_start_line = 1
+    buf_has_content = False
     at_line_start = True
     out: list[tuple[int, str]] = []
 
+    def push(chunk: str, at: int | None = None) -> None:
+        """Append to the current statement, anchoring its reported line.
+
+        `buf` collects blank lines, comment gaps, and stripped meta-commands
+        between statements, so the line a statement *starts* on is the line of
+        its first non-whitespace chunk -- not wherever the previous flush left
+        off. `at` overrides for chunks consumed after `line` has already been
+        advanced past them (multi-line literals).
+        """
+        nonlocal buf_start_line, buf_has_content
+        buf.append(chunk)
+        if not buf_has_content and chunk.strip():
+            buf_start_line = line if at is None else at
+            buf_has_content = True
+
     def flush() -> None:
-        nonlocal buf, buf_start_line
+        nonlocal buf, buf_has_content
         s = "".join(buf).strip()
         if s:
             out.append((buf_start_line, s))
         buf = []
-        buf_start_line = line
+        buf_has_content = False
 
     while i < n:
         c = text[i]
 
         if c == "\n":
-            buf.append("\n")
+            push("\n")
             i += 1
             line += 1
             at_line_start = True
             continue
 
         if at_line_start and c in " \t":
-            buf.append(c)
+            push(c)
             i += 1
             continue
 
@@ -143,6 +182,7 @@ def tokenize(text: str) -> list[tuple[int, str]]:
             continue
 
         if c == "'":
+            str_start_line = line
             i += 1
             while i < n:
                 if text[i] == "'" and i + 1 < n and text[i + 1] == "'":
@@ -154,19 +194,19 @@ def tokenize(text: str) -> list[tuple[int, str]]:
                 if text[i] == "\n":
                     line += 1
                 i += 1
-            buf.append(" __STR__ ")
+            push(" __STR__ ", at=str_start_line)
             continue
 
         if c == '"':
-            buf.append(c)
+            push(c)
             i += 1
             while i < n and text[i] != '"':
                 if text[i] == "\n":
                     line += 1
-                buf.append(text[i])
+                push(text[i])
                 i += 1
             if i < n:
-                buf.append(text[i])
+                push(text[i])
                 i += 1
             continue
 
@@ -175,12 +215,13 @@ def tokenize(text: str) -> list[tuple[int, str]]:
             if m:
                 tag = m.group(0)
                 end = text.find(tag, i + len(tag))
+                dollar_start_line = line
                 if end == -1:
-                    buf.append(" __STR__ ")
+                    push(" __STR__ ", at=dollar_start_line)
                     i = n
                 else:
                     line += text[i:end + len(tag)].count("\n")
-                    buf.append(" __STR__ ")
+                    push(" __STR__ ", at=dollar_start_line)
                     i = end + len(tag)
                 continue
 
@@ -189,7 +230,7 @@ def tokenize(text: str) -> list[tuple[int, str]]:
             flush()
             continue
 
-        buf.append(c)
+        push(c)
         i += 1
 
     flush()
@@ -260,6 +301,17 @@ def check(path: Path) -> int:
         if kw == "COPY":
             if re.search(r"\bCOPY\b[\s\S]+\bFROM\b", stmt, re.IGNORECASE):
                 errors.append(f"{path}:{line}: COPY ... FROM writes to DB: {stmt[:80]!r}")
+            continue
+
+        if kw in ("SET", "RESET"):
+            m = SET_TARGET_RE.match(stmt.strip())
+            target = m.group(1).lower() if m else None
+            if target in SAFE_SESSION_GUCS:
+                continue
+            errors.append(
+                f"{path}:{line}: {kw} of non-allowlisted target "
+                f"{target or '?'!r}: {stmt[:80]!r}"
+            )
             continue
 
         if kw in WRITE_KEYWORDS:

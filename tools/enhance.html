@@ -798,6 +798,9 @@ const RUBRIC = [
   { sev: 'crit', re: /logical\s+replication\s+spill/i,
     label: 'Logical replication spill files',
     why: 'Decoded WAL spilling to disk — replication lag and disk-pressure risk.' },
+  { sev: 'crit', re: /collation\s+version\s+mismatch/i,
+    label: 'Collation version mismatch (glibc)',
+    why: 'OS collation changed under existing indexes — text index ordering is wrong, so lookups miss rows and UNIQUE indexes may hold duplicates. REINDEX before trusting them.' },
 
   // WARNING — operational degradation, near-immediate impact
   { sev: 'warn', re: /20\s*%\s*dead\s+rows|tables\s+that\s+have\s+more\s+than\s+20/i,
@@ -821,6 +824,9 @@ const RUBRIC = [
   { sev: 'warn', re: /orphaned\s+prepared/i,
     label: 'Orphaned prepared transactions',
     why: 'Prepared txn held > threshold; pins resources, blocks vacuum.' },
+  { sev: 'warn', re: /materialized\s+views\s+that\s+are\s+unpopulated|REFRESH\s+MATERIALIZED\s+VIEW\s+CONCURRENTLY/i,
+    label: 'Materialized views need attention',
+    why: 'Unpopulated views error on query; without a unique index every refresh takes an exclusive lock and blocks readers.' },
 
   // NOTICE — configuration choices, perf hints
   { sev: 'note', re: /duplicate\s+indexes/i,
@@ -847,6 +853,9 @@ const RUBRIC = [
   { sev: 'note', re: /upgrade\s+available|outdated\s+extensions?/i,
     label: 'Outdated extensions',
     why: 'Newer extension version available; review changelog before upgrading.' },
+  { sev: 'note', re: /large\s+tables\s+that\s+are\s+not\s+partitioned/i,
+    label: 'Partitioning candidates',
+    why: 'Large unpartitioned tables: partitioning cuts vacuum and index-maintenance cost and turns bulk deletes into DROP PARTITION.' },
 ];
 
 /* -----------------------------------------------------------------
@@ -875,6 +884,7 @@ const SECTION_GROUPS = [
       'Database_size', 'Table_Size', 'index_Size', 'Tablespaces_Info',
       'Toast_Tables_Mapping', 'Temp_tables', 'Temp_tables_files',
       'Large_objects', 'unlogged_tables', 'Partition_tables',
+      'Partitioning_Candidates',
   ]},
   { label: 'Performance', sections: [
       'pg_stat_statements_extension', 'table_Access_Profile',
@@ -898,6 +908,7 @@ const SECTION_GROUPS = [
       'Duplicate_indexes', 'FK_without_index',
       'PK_FK_using_numeric_or_integer_data_type',
       'sequences', 'triggers', 'Materialized_Views',
+      'Collation_Index_Risk',
   ]},
   { label: 'Security & access', sections: [
       'Users_Roles_Info', 'access_privileges', 'default_access_privileges',

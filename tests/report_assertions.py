@@ -48,6 +48,9 @@ REQUIRED_SECTIONS = [
     "ssl",
     "background_processes",
     "pg_config",
+    "Materialized_Views",
+    "Collation_Index_Risk",
+    "Partitioning_Candidates",
 ]
 
 # Observation-warning signature → substring (case-insensitive) we expect to
@@ -73,6 +76,9 @@ OBSERVATION_MARKERS: dict[str, str] = {
     "inactive_replication_slots":   "inactive replication",
     "logical_replication_spill":    "spill",
     "outdated_extensions":          "upgrade available",
+    "collation_mismatch":           "collation version mismatch",
+    "matview_health":               "materialized views that are unpopulated",
+    "partitioning_candidates":      "large tables that are not partitioned",
 }
 
 HREF_RE = re.compile(r'href="#([^"]+)"')

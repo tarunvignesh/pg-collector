@@ -202,7 +202,7 @@ ASSERT_ARGS=(--report "$ARTIFACT_DIR/report.html" --script "$REPO/pg_collector.s
 if [[ "$SEED" == "populated" ]]; then
     # These are the observations we reliably trigger in seed_health_checks.sql.
     ASSERT_ARGS+=(--expect-observations \
-        "duplicate_indexes,invalid_indexes,unused_indexes,autovacuum_parameter,sequences,ssl,enable_indexonlyscan,excessive_logging,track_counts,enable_indexscan,synchronous_commit,dead_rows,table_autovacuum_off,inactive_replication_slots")
+        "duplicate_indexes,invalid_indexes,unused_indexes,autovacuum_parameter,sequences,ssl,enable_indexonlyscan,excessive_logging,track_counts,enable_indexscan,synchronous_commit,dead_rows,table_autovacuum_off,inactive_replication_slots,collation_mismatch,matview_health")
 elif [[ "$SKIP_SEED" -eq 0 ]]; then
     # Empty-DB mode: no observations should fire except perhaps SSL.
     # (We can't use --no-observations here because the CI container is

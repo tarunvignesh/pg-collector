@@ -69,6 +69,8 @@ SELECT CASE WHEN :'help' = ':help' THEN 'f' ELSE :'help' END AS "help" \gset
 \echo '  foreign_servers - Foreign Servers'
 \echo '  pg_shdepend     - pg_shdepend (shared object dependencies)'
 \echo '  fk_no_index     - FK without index'
+\echo '  collation_risk  - Collation / glibc index risk'
+\echo '  part_candidates - Partitioning candidates'
 \echo ''
 \echo '  ---------- Aurora PostgreSQL ----------'
 \echo '  aurora_version          - Aurora version'
@@ -99,6 +101,9 @@ SELECT CASE WHEN :'help' = ':help' THEN 'f' ELSE :'help' END AS "help" \gset
 \echo '  limitless_sessions      - Limitless Sessions/Connections'
 \echo '  limitless_dist_sess     - Distributed sessions info'
 \echo '  limitless_wait_events   - Limitless Database Load (Wait events)'
+\echo ''
+\echo 'Tuning:'
+\echo '  part_min_gb     - Partitioning candidate size threshold in GB (default: 50)'
 \echo ''
 \echo 'Usage:'
 \echo '  psql -v fullmod=f -v vacuum=t -v replication=t -f pg_collector.sql'
@@ -208,6 +213,14 @@ SELECT CASE WHEN :'invalid_db' = ':invalid_db' THEN 'f' ELSE :'invalid_db' END A
 SELECT CASE WHEN :'mat_views' = ':mat_views' THEN 'f' ELSE :'mat_views' END AS "mat_views" \gset
 \set foreign_servers :foreign_servers
 SELECT CASE WHEN :'foreign_servers' = ':foreign_servers' THEN 'f' ELSE :'foreign_servers' END AS "foreign_servers" \gset
+\set collation_risk :collation_risk
+SELECT CASE WHEN :'collation_risk' = ':collation_risk' THEN 'f' ELSE :'collation_risk' END AS "collation_risk" \gset
+\set part_candidates :part_candidates
+SELECT CASE WHEN :'part_candidates' = ':part_candidates' THEN 'f' ELSE :'part_candidates' END AS "part_candidates" \gset
+-- Size threshold (GB) above which an unpartitioned table is reported as a
+-- partitioning candidate. Override with -v part_min_gb=<n>.
+\set part_min_gb :part_min_gb
+SELECT CASE WHEN :'part_min_gb' = ':part_min_gb' THEN '50' ELSE :'part_min_gb' END AS "part_min_gb" \gset
 -- Compute do_ flags
 SELECT CASE WHEN :'fullmod' = 't' OR :'observations' = 't' THEN 't' ELSE 'f' END AS "do_observations" \gset
 SELECT CASE WHEN :'fullmod' = 't' OR :'db_size' = 't' THEN 't' ELSE 'f' END AS "do_db_size" \gset
@@ -257,6 +270,8 @@ SELECT CASE WHEN :'fullmod' = 't' OR :'idx_progress' = 't' THEN 't' ELSE 'f' END
 SELECT CASE WHEN :'fullmod' = 't' OR :'invalid_db' = 't' THEN 't' ELSE 'f' END AS "do_invalid_db" \gset
 SELECT CASE WHEN :'fullmod' = 't' OR :'mat_views' = 't' THEN 't' ELSE 'f' END AS "do_mat_views" \gset
 SELECT CASE WHEN :'fullmod' = 't' OR :'foreign_servers' = 't' THEN 't' ELSE 'f' END AS "do_foreign_servers" \gset
+SELECT CASE WHEN :'fullmod' = 't' OR :'collation_risk' = 't' THEN 't' ELSE 'f' END AS "do_collation_risk" \gset
+SELECT CASE WHEN :'fullmod' = 't' OR :'part_candidates' = 't' THEN 't' ELSE 'f' END AS "do_part_candidates" \gset
 -- Resolve Aurora sub-section variables
 \set aurora_version :aurora_version
 SELECT CASE WHEN :'aurora_version' = ':aurora_version' THEN 'f' ELSE :'aurora_version' END AS "aurora_version" \gset
@@ -627,6 +642,14 @@ select case when pg_is_in_recovery() then 'Standby/Reader DB (Read Only)' else '
 \echo '  - FK without index'
 \qecho <li><a href="#FK_without_index">FK without index</a></li>
 \endif
+\if :do_collation_risk
+\echo '  - Collation / glibc index risk'
+\qecho <li><a href="#Collation_Index_Risk">Collation / glibc index risk</a></li>
+\endif
+\if :do_part_candidates
+\echo '  - Partitioning candidates'
+\qecho <li><a href="#Partitioning_Candidates">Partitioning candidates</a></li>
+\endif
 \if :do_aurora_version
 \echo '  - Aurora version'
 \qecho <li><a href="#Aurora_version">Aurora version</a></li>
@@ -840,6 +863,12 @@ select * from pg_database;
 \qecho <td nowrap align="center" width="25%"><a class="link" href="#Index_Creation_Progress">Index Creation Progress</a></td>
 \qecho <td nowrap align="center" width="25%"><a class="link" href="#Materialized_Views">Materialized Views</a></td>
 \qecho <td nowrap align="center" width="25%"><a class="link" href="#Foreign_Servers">Foreign Servers</a></td>
+\qecho <td nowrap align="center" width="25%"><a class="link" href="#Collation_Index_Risk">Collation / glibc index risk</a></td>
+\qecho </tr>
+\qecho <tr>
+\qecho <td nowrap align="center" width="25%"><a class="link" href="#Partitioning_Candidates">Partitioning candidates</a></td>
+\qecho <td nowrap align="center" width="25%"><a class="link" href="#******">******</a></td>
+\qecho <td nowrap align="center" width="25%"><a class="link" href="#******">******</a></td>
 \qecho <td nowrap align="center" width="25%"><a class="link" href="#******">******</a></td>
 \qecho </tr>
 \qecho </table>
@@ -1359,6 +1388,63 @@ FROM pg_settings WHERE pending_restart = true \gset
 \if :obsrv_pending_restart
     \qecho <br>
     \qecho '&#8594; The database has parameters that have been changed but require a restart to take effect. Please check the following section <a class="link" href="#DB_parameters">DB parameters</a> .'
+\else
+\endif
+
+-------------------------------------------------
+-- Check for collation (glibc/ICU) version drift --
+-------------------------------------------------
+-- A mismatch means the OS collation library changed under a live data
+-- directory - classically a RHEL 7 (glibc 2.17) to RHEL 8+ (glibc 2.28)
+-- in-place upgrade. Text index ordering is then wrong: lookups miss rows
+-- and UNIQUE indexes can admit duplicates.
+select count(*) > 0 obsrv_collation_mismatch from (
+    select 1 from pg_collation
+     where collversion is not null
+       and collversion is distinct from pg_collation_actual_version(oid)
+    union all
+    select 1 from pg_database
+     where datname = current_database()
+       and datcollversion is distinct from pg_database_collation_actual_version(oid)
+) as t \gset
+
+\if :obsrv_collation_mismatch
+    \qecho <br>
+    \qecho '&#8594; The database has a collation version mismatch, typically caused by an OS upgrade such as RHEL 7 to RHEL 8 (glibc 2.17 to 2.28). Indexes on text columns may be silently corrupt and should be rebuilt. Please check the following section <a class="link" href="#Collation_Index_Risk">Collation / glibc index risk</a> .'
+\else
+\endif
+
+-------------------------------------------------
+-- Check for materialized views needing care   --
+-------------------------------------------------
+select count(*) > 0 obsrv_matview_health
+from pg_class c
+where c.relkind = 'm'
+  and ( c.relispopulated = false
+        or not exists (select 1 from pg_index i
+                        where i.indrelid = c.oid and i.indisunique) ) \gset
+
+\if :obsrv_matview_health
+    \qecho <br>
+    \qecho '&#8594; The database has materialized views that are unpopulated or have no unique index, which means REFRESH MATERIALIZED VIEW CONCURRENTLY cannot be used and every refresh takes an exclusive lock. Please check the following section <a class="link" href="#Materialized_Views">Materialized Views</a> .'
+\else
+\endif
+
+-------------------------------------------------
+-- Check for large unpartitioned tables        --
+-------------------------------------------------
+select count(*) > 0 obsrv_partitioning_candidates
+from pg_class c
+join pg_namespace n on n.oid = c.relnamespace
+where c.relkind = 'r'
+  and not c.relispartition
+  and n.nspname not in ('pg_catalog','information_schema','pg_toast')
+  and n.nspname not like 'pg_temp%'
+  and pg_total_relation_size(c.oid) >= :part_min_gb * 1024::bigint * 1024 * 1024 \gset
+
+\if :obsrv_partitioning_candidates
+    \qecho <br>
+    \qecho '&#8594; The database has large tables that are not partitioned. Declarative partitioning can cut vacuum and index-maintenance cost and make bulk deletes cheap. Please check the following section <a class="link" href="#Partitioning_Candidates">Partitioning candidates</a> .'
 \else
 \endif
 
@@ -5238,6 +5324,97 @@ FROM pg_matviews
 WHERE ispopulated = false
 ORDER BY schemaname, matviewname;
 
+\qecho <br>
+\qecho <h3>Refresh readiness (health check):</h3>
+\qecho <h4>Note: REFRESH MATERIALIZED VIEW CONCURRENTLY requires at least one UNIQUE index on the view. Without one, every refresh takes an ACCESS EXCLUSIVE lock and blocks all readers for the duration.</h4>
+\qecho <br>
+SELECT n.nspname                                   AS schema,
+       c.relname                                   AS matview,
+       c.relispopulated                            AS populated,
+       EXISTS (SELECT 1 FROM pg_index i
+                WHERE i.indrelid = c.oid AND i.indisunique) AS has_unique_index,
+       (SELECT count(*) FROM pg_index i WHERE i.indrelid = c.oid) AS index_count,
+       CASE WHEN NOT c.relispopulated
+                 THEN 'NEVER REFRESHED - created WITH NO DATA, queries on it will error'
+            WHEN NOT EXISTS (SELECT 1 FROM pg_index i
+                              WHERE i.indrelid = c.oid AND i.indisunique)
+                 THEN 'NO UNIQUE INDEX - REFRESH CONCURRENTLY not possible, refresh blocks readers'
+            ELSE 'OK - can REFRESH CONCURRENTLY' END AS finding,
+       pg_size_pretty(pg_total_relation_size(c.oid)) AS total_size
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind = 'm'
+ORDER BY (NOT c.relispopulated) DESC,
+         (NOT EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = c.oid AND i.indisunique)) DESC,
+         pg_total_relation_size(c.oid) DESC;
+
+\qecho <br>
+\qecho <h3>Refresh dependency order:</h3>
+\qecho <h4>Note: A materialized view built on another materialized view must be refreshed after its source, otherwise it is rebuilt from stale data. Rows where depends_on_kind is materialized view indicate a stacked view.</h4>
+\qecho <br>
+SELECT DISTINCT
+       dn.nspname || '.' || dep.relname AS matview,
+       sn.nspname || '.' || src.relname AS depends_on,
+       CASE src.relkind WHEN 'm' THEN 'materialized view'
+                        WHEN 'r' THEN 'table'
+                        WHEN 'p' THEN 'partitioned table'
+                        WHEN 'v' THEN 'view'
+                        WHEN 'f' THEN 'foreign table'
+                        ELSE src.relkind::text END AS depends_on_kind
+FROM pg_depend d
+JOIN pg_rewrite r    ON r.oid  = d.objid
+JOIN pg_class dep    ON dep.oid = r.ev_class
+JOIN pg_namespace dn ON dn.oid = dep.relnamespace
+JOIN pg_class src    ON src.oid = d.refobjid
+JOIN pg_namespace sn ON sn.oid = src.relnamespace
+WHERE d.classid    = 'pg_rewrite'::regclass
+  AND d.refclassid = 'pg_class'::regclass
+  AND dep.relkind  = 'm'
+  AND src.oid <> dep.oid
+  AND src.relkind IN ('r','m','v','p','f')
+ORDER BY 1, 2;
+
+\qecho <br>
+\qecho <h3>Staleness and bloat indicators:</h3>
+\qecho <h4>Note: PostgreSQL does not record when a materialized view was last refreshed. The vacuum and analyze timestamps below are the closest available proxy. Dead rows accumulate only on views refreshed CONCURRENTLY, which performs UPDATE and DELETE rather than a heap rewrite.</h4>
+\qecho <br>
+SELECT st.schemaname                AS schema,
+       st.relname                   AS matview,
+       st.n_live_tup                AS live_rows,
+       st.n_dead_tup                AS dead_rows,
+       CASE WHEN st.n_live_tup > 0
+            THEN round(100.0 * st.n_dead_tup / st.n_live_tup, 1)
+            ELSE NULL END           AS dead_pct,
+       st.last_vacuum,
+       st.last_autovacuum,
+       st.last_analyze,
+       st.last_autoanalyze
+FROM pg_stat_all_tables st
+JOIN pg_class c ON c.oid = st.relid
+WHERE c.relkind = 'm'
+ORDER BY st.n_dead_tup DESC, st.schemaname, st.relname;
+
+\qecho <br>
+\qecho <h3>Unused indexes on materialized views:</h3>
+\qecho <h4>Note: Indexes on a materialized view are rebuilt or maintained on every refresh. Unused ones are pure overhead, except a UNIQUE index kept solely to enable REFRESH CONCURRENTLY.</h4>
+\qecho <br>
+SELECT n.nspname                        AS schema,
+       c.relname                        AS matview,
+       ic.relname                       AS index_name,
+       i.indisunique                    AS is_unique,
+       sui.idx_scan                     AS index_scans,
+       pg_size_pretty(pg_relation_size(i.indexrelid)) AS index_size,
+       CASE WHEN i.indisunique THEN 'keep - enables REFRESH CONCURRENTLY'
+            ELSE 'review - never scanned' END AS recommendation
+FROM pg_index i
+JOIN pg_class ic     ON ic.oid = i.indexrelid
+JOIN pg_class c      ON c.oid  = i.indrelid
+JOIN pg_namespace n  ON n.oid  = c.relnamespace
+LEFT JOIN pg_stat_all_indexes sui ON sui.indexrelid = i.indexrelid
+WHERE c.relkind = 'm'
+  AND coalesce(sui.idx_scan, 0) = 0
+ORDER BY pg_relation_size(i.indexrelid) DESC;
+
 \qecho </details>
 
 \qecho <center>[<a class="noLink" href="#top">Top</a>]</center><p>
@@ -5316,6 +5493,256 @@ ORDER BY server, local_user;
 
 \qecho <center>[<a class="noLink" href="#top">Top</a>]</center><p>
 \endif
+
+\if :do_collation_risk
+-- +----------------------------------------------------------------------------+
+-- |      - Collation_Index_Risk                             -                  |
+-- +----------------------------------------------------------------------------+
+
+\qecho <a name="Collation_Index_Risk"></a>
+\qecho <font size="+2" face="Arial,Helvetica,Geneva,sans-serif" color="#16191f"><b>Collation / glibc index risk</b></font><hr align="left" width="460">
+\qecho <br>
+\qecho <details>
+\qecho <h4>Note: PostgreSQL stores the collation library version that was in effect when each index was built. If the operating system later provides a different version, sort order can change and every B-tree index over a text, varchar or char column may be silently wrong: equality lookups miss rows, range scans return incomplete results, and UNIQUE indexes can admit duplicates.</h4>
+\qecho <h4>The classic trigger is an in-place OS upgrade of a running data directory - RHEL 7 (glibc 2.17) to RHEL 8 or later (glibc 2.28), where a large number of locales changed ordering. A dump and restore, or pg_upgrade followed by a REINDEX, is not affected because the indexes are rebuilt.</h4>
+\qecho <br>
+
+\qecho <h3>Database collation state:</h3>
+SELECT d.datname                                              AS database,
+       CASE d.datlocprovider WHEN 'c' THEN 'libc'
+                             WHEN 'i' THEN 'icu'
+                             WHEN 'b' THEN 'builtin'
+                             ELSE d.datlocprovider::text END  AS provider,
+       d.datcollate                                           AS lc_collate,
+       d.datctype                                             AS lc_ctype,
+       d.datcollversion                                       AS recorded_version,
+       pg_database_collation_actual_version(d.oid)            AS os_version,
+       CASE WHEN d.datcollversion IS NULL
+                 THEN 'not tracked for this provider'
+            WHEN d.datcollversion IS NOT DISTINCT FROM pg_database_collation_actual_version(d.oid)
+                 THEN 'OK - recorded version matches the operating system'
+            ELSE 'MISMATCH - rebuild every index that uses the database default collation'
+       END                                                    AS status
+FROM pg_database d
+WHERE d.datname = current_database();
+
+\qecho <br>
+\qecho <h3>Collations whose version changed:</h3>
+\qecho <h4>Note: severity CRITICAL marks a jump across glibc 2.28, the RHEL 7 to RHEL 8 boundary, where ordering changed for most locales.</h4>
+\qecho <br>
+SELECT n.nspname                                            AS schema,
+       c.collname                                           AS collation_name,
+       CASE c.collprovider WHEN 'c' THEN 'libc'
+                           WHEN 'i' THEN 'icu'
+                           WHEN 'b' THEN 'builtin'
+                           ELSE c.collprovider::text END    AS provider,
+       c.collversion                                        AS recorded_version,
+       pg_collation_actual_version(c.oid)                   AS os_version,
+       CASE WHEN c.collprovider = 'c'
+                 AND c.collversion ~ '^[0-9]+(\.[0-9]+)*$'
+                 AND pg_collation_actual_version(c.oid) ~ '^[0-9]+(\.[0-9]+)*$'
+                 AND string_to_array(c.collversion, '.')::int[] < string_to_array('2.28', '.')::int[]
+                 AND string_to_array(pg_collation_actual_version(c.oid), '.')::int[] >= string_to_array('2.28', '.')::int[]
+                 THEN 'CRITICAL - crosses glibc 2.28 (RHEL 7 to RHEL 8 or later)'
+            ELSE 'WARNING - collation version changed' END  AS severity
+FROM pg_collation c
+JOIN pg_namespace n ON n.oid = c.collnamespace
+WHERE c.collversion IS NOT NULL
+  AND c.collversion IS DISTINCT FROM pg_collation_actual_version(c.oid)
+ORDER BY 6, 1, 2;
+
+\qecho <br>
+\qecho <h3>Affected index summary:</h3>
+WITH defcoll AS (
+    SELECT oid FROM pg_collation
+     WHERE collname = 'default' AND collnamespace = 'pg_catalog'::regnamespace
+),
+bad_coll AS (
+    SELECT c.oid AS colloid
+      FROM pg_collation c
+     WHERE c.collversion IS NOT NULL
+       AND c.collversion IS DISTINCT FROM pg_collation_actual_version(c.oid)
+),
+bad_db AS (
+    SELECT 1
+      FROM pg_database d
+     WHERE d.datname = current_database()
+       AND d.datcollversion IS DISTINCT FROM pg_database_collation_actual_version(d.oid)
+),
+affected AS (
+    SELECT DISTINCT i.indexrelid, i.indisunique, i.indisprimary
+      FROM pg_index i
+      CROSS JOIN LATERAL unnest(i.indcollation::oid[]) AS u(colloid)
+     WHERE u.colloid <> 0
+       AND ( u.colloid IN (SELECT colloid FROM bad_coll)
+             OR (u.colloid = (SELECT oid FROM defcoll) AND EXISTS (SELECT 1 FROM bad_db)) )
+)
+SELECT count(*)                                             AS affected_indexes,
+       count(*) FILTER (WHERE indisprimary)                 AS primary_keys,
+       count(*) FILTER (WHERE indisunique AND NOT indisprimary) AS unique_indexes,
+       pg_size_pretty(coalesce(sum(pg_relation_size(indexrelid)), 0)) AS total_index_size
+FROM affected;
+
+\qecho <br>
+\qecho <h3>Indexes requiring REINDEX (largest 200):</h3>
+\qecho <h4>Note: PRIMARY KEY and UNIQUE entries are the most urgent - a broken ordering means the uniqueness guarantee was not enforced while the mismatch existed, so duplicates may already be present.</h4>
+\qecho <br>
+WITH defcoll AS (
+    SELECT oid FROM pg_collation
+     WHERE collname = 'default' AND collnamespace = 'pg_catalog'::regnamespace
+),
+coll_state AS (
+    SELECT c.oid AS colloid,
+           n.nspname || '.' || c.collname AS collation_name,
+           c.collversion AS recorded_version,
+           pg_collation_actual_version(c.oid) AS os_version
+      FROM pg_collation c
+      JOIN pg_namespace n ON n.oid = c.collnamespace
+     WHERE c.collversion IS NOT NULL
+       AND c.collversion IS DISTINCT FROM pg_collation_actual_version(c.oid)
+),
+db_state AS (
+    SELECT d.datcollversion AS recorded_version,
+           pg_database_collation_actual_version(d.oid) AS os_version
+      FROM pg_database d
+     WHERE d.datname = current_database()
+       AND d.datcollversion IS DISTINCT FROM pg_database_collation_actual_version(d.oid)
+)
+SELECT DISTINCT
+       n.nspname                                        AS schema,
+       tc.relname                                       AS table_name,
+       ic.relname                                       AS index_name,
+       CASE WHEN i.indisprimary THEN 'PRIMARY KEY'
+            WHEN i.indisunique  THEN 'UNIQUE'
+            ELSE 'index' END                            AS index_kind,
+       coalesce(cs.collation_name, 'database default')  AS affected_collation,
+       coalesce(cs.recorded_version, db.recorded_version) AS recorded_version,
+       coalesce(cs.os_version, db.os_version)           AS os_version,
+       pg_size_pretty(pg_relation_size(i.indexrelid))   AS index_size,
+       pg_relation_size(i.indexrelid)                   AS size_bytes
+FROM pg_index i
+JOIN pg_class ic    ON ic.oid = i.indexrelid
+JOIN pg_class tc    ON tc.oid = i.indrelid
+JOIN pg_namespace n ON n.oid  = tc.relnamespace
+CROSS JOIN LATERAL unnest(i.indcollation::oid[]) AS u(colloid)
+LEFT JOIN coll_state cs ON cs.colloid = u.colloid
+LEFT JOIN db_state db   ON u.colloid = (SELECT oid FROM defcoll)
+WHERE u.colloid <> 0
+  AND (cs.colloid IS NOT NULL OR db.recorded_version IS NOT NULL)
+ORDER BY size_bytes DESC
+LIMIT 200;
+
+\qecho <br>
+\qecho <h3>Partitioned tables with a text partition key:</h3>
+\qecho <h4>Note: RANGE and LIST partitioning on a collatable column uses collation order to route rows. If that order changed, existing rows may now sit in the wrong partition and new rows may route differently from old ones.</h4>
+\qecho <br>
+SELECT n.nspname                        AS schema,
+       c.relname                        AS partitioned_table,
+       pg_get_partkeydef(c.oid)         AS partition_key,
+       (SELECT count(*) FROM pg_inherits inh WHERE inh.inhparent = c.oid) AS partitions
+FROM pg_class c
+JOIN pg_namespace n          ON n.oid = c.relnamespace
+JOIN pg_partitioned_table pt ON pt.partrelid = c.oid
+CROSS JOIN LATERAL unnest(pt.partcollation::oid[]) AS u(colloid)
+WHERE u.colloid <> 0
+  AND ( u.colloid IN (SELECT c2.oid FROM pg_collation c2
+                       WHERE c2.collversion IS NOT NULL
+                         AND c2.collversion IS DISTINCT FROM pg_collation_actual_version(c2.oid))
+        OR ( u.colloid = (SELECT oid FROM pg_collation
+                           WHERE collname = 'default'
+                             AND collnamespace = 'pg_catalog'::regnamespace)
+             AND EXISTS (SELECT 1 FROM pg_database d
+                          WHERE d.datname = current_database()
+                            AND d.datcollversion IS DISTINCT FROM pg_database_collation_actual_version(d.oid)) ) )
+GROUP BY 1, 2, 3, c.oid
+ORDER BY 1, 2;
+
+\qecho <br>
+\qecho <h3>Remediation:</h3>
+\qecho <h4>1. Rebuild the affected indexes first - REINDEX INDEX CONCURRENTLY &lt;index&gt;, or REINDEX DATABASE &lt;db&gt; during a maintenance window. Until this is done, do not trust UNIQUE constraints on text columns.</h4>
+\qecho <h4>2. For a UNIQUE or PRIMARY KEY index, check for duplicates that slipped in before rebuilding, because REINDEX will fail if any exist.</h4>
+\qecho <h4>3. Only after rebuilding, clear the recorded mismatch - ALTER COLLATION &lt;name&gt; REFRESH VERSION for an individual collation, and ALTER DATABASE &lt;db&gt; REFRESH COLLATION VERSION for the database default. Refreshing the version first only hides the warning, it does not fix the indexes.</h4>
+\qecho <h4>4. To avoid this class of problem on future OS moves, consider the ICU provider or the C.UTF-8 builtin locale, whose ordering is stable across OS upgrades.</h4>
+
+\qecho </details>
+
+\qecho <center>[<a class="noLink" href="#top">Top</a>]</center><p>
+\endif
+
+\if :do_part_candidates
+-- +----------------------------------------------------------------------------+
+-- |      - Partitioning_Candidates                          -                  |
+-- +----------------------------------------------------------------------------+
+
+\qecho <a name="Partitioning_Candidates"></a>
+\qecho <font size="+2" face="Arial,Helvetica,Geneva,sans-serif" color="#16191f"><b>Partitioning candidates</b></font><hr align="left" width="460">
+\qecho <br>
+\qecho <details>
+\qecho <h4>Note: Lists ordinary tables that are not partitioned, ranked by total size, together with the signals that make declarative partitioning worthwhile - a usable range key, heavy dead-row churn, and sequential scan pressure. Partitioning helps most when old data is deleted in bulk (DROP PARTITION replaces a mass DELETE plus VACUUM), when autovacuum cannot keep up with one very large heap, or when queries filter on a time column and can prune.</h4>
+\qecho <h4>The size threshold for the matching health check is :part_min_gb GB. Override it with -v part_min_gb=&lt;n&gt;.</h4>
+\qecho <br>
+
+\qecho <h3>Candidate tables (largest 25 unpartitioned tables):</h3>
+SELECT n.nspname                                        AS schema,
+       c.relname                                        AS table_name,
+       pg_size_pretty(pg_total_relation_size(c.oid))    AS total_size,
+       c.reltuples::bigint                              AS est_rows,
+       timekeys.cols                                    AS candidate_range_keys,
+       coalesce(st.n_dead_tup, 0)                       AS dead_rows,
+       coalesce(st.seq_scan, 0)                         AS seq_scans,
+       coalesce(st.n_tup_del, 0)                        AS rows_deleted,
+       CASE WHEN pg_total_relation_size(c.oid) >= :part_min_gb * 1024::bigint * 1024 * 1024
+                 THEN 'over threshold'
+            ELSE 'under threshold' END
+       || CASE WHEN timekeys.cols IS NOT NULL
+                    THEN '; has time column'
+               ELSE '; no date or timestamp column - needs an explicit key' END
+       || CASE WHEN coalesce(st.n_dead_tup, 0) > 1000000
+                    THEN '; heavy dead-row churn' ELSE '' END
+       || CASE WHEN coalesce(st.n_tup_del, 0) > 1000000
+                    THEN '; bulk deletes - DROP PARTITION would replace them' ELSE '' END
+                                                        AS assessment
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+LEFT JOIN pg_stat_all_tables st ON st.relid = c.oid
+LEFT JOIN LATERAL (
+    SELECT string_agg(a.attname || ' (' || format_type(a.atttypid, NULL) || ')', ', '
+                      ORDER BY a.attnum) AS cols
+      FROM pg_attribute a
+     WHERE a.attrelid = c.oid
+       AND a.attnum > 0
+       AND NOT a.attisdropped
+       AND a.atttypid IN ('date'::regtype, 'timestamp'::regtype, 'timestamptz'::regtype)
+) timekeys ON true
+WHERE c.relkind = 'r'
+  AND NOT c.relispartition
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+  AND n.nspname NOT LIKE 'pg_temp%'
+  AND n.nspname NOT LIKE 'pg_toast_temp%'
+ORDER BY pg_total_relation_size(c.oid) DESC
+LIMIT 25;
+
+\qecho <br>
+\qecho <h3>Legacy inheritance-based partitioning:</h3>
+\qecho <h4>Note: These parents use the pre-10 inheritance scheme. Declarative partitioning gives partition pruning at execution time, partition-wise joins and aggregates, and ATTACH or DETACH without trigger maintenance.</h4>
+\qecho <br>
+SELECT n.nspname                                                   AS schema,
+       c.relname                                                   AS parent_table,
+       count(inh.inhrelid)                                         AS child_tables,
+       pg_size_pretty(sum(pg_total_relation_size(inh.inhrelid)))    AS children_total_size
+FROM pg_class c
+JOIN pg_namespace n  ON n.oid = c.relnamespace
+JOIN pg_inherits inh ON inh.inhparent = c.oid
+WHERE c.relkind = 'r'
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+GROUP BY 1, 2
+ORDER BY sum(pg_total_relation_size(inh.inhrelid)) DESC;
+
+\qecho </details>
+
+\qecho <center>[<a class="noLink" href="#top">Top</a>]</center><p>
+\endif
+
 
 ----- Amazon Aurora PostgreSQL  -----
 \if :isaurora

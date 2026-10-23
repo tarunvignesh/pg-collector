@@ -133,6 +133,75 @@ EXCEPTION WHEN OTHERS THEN
 END
 $$;
 
+-- ---------- #21 Collation version mismatch (glibc 2.28 / RHEL 7 -> 8) ----------
+-- Simulates an in-place OS upgrade: a collation recorded under glibc 2.17
+-- (RHEL 7) running on whatever glibc this host actually provides. The locale
+-- is taken from the current database so this works wherever the suite runs.
+-- Collations are database-scoped, so --isolate drops this with the temp DB.
+DO $$
+DECLARE loc text;
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_collation WHERE collname = 'pgc_rhel7_collation') THEN
+        RETURN;
+    END IF;
+    SELECT datcollate INTO loc FROM pg_database WHERE datname = current_database();
+    BEGIN
+        EXECUTE format(
+            'CREATE COLLATION pgc_rhel7_collation (provider = libc, locale = %L, version = %L)',
+            loc, '2.17');
+    EXCEPTION WHEN others THEN
+        RAISE NOTICE 'versioned collation not supported here (%); skipping glibc fixture', SQLERRM;
+    END;
+END
+$$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_collation WHERE collname = 'pgc_rhel7_collation') THEN
+        RAISE NOTICE 'no versioned collation; skipping affected-index fixture';
+        RETURN;
+    END IF;
+    CREATE TABLE IF NOT EXISTS pgc_fixture.collation_victim (
+        id     int primary key,
+        label  text COLLATE pgc_rhel7_collation,
+        plain  text
+    );
+    -- An affected non-unique index and an affected UNIQUE index: the UNIQUE one
+    -- is the dangerous case, since a broken ordering means uniqueness was not
+    -- actually enforced while the mismatch existed.
+    CREATE INDEX IF NOT EXISTS collation_victim_label_idx
+        ON pgc_fixture.collation_victim (label);
+    CREATE UNIQUE INDEX IF NOT EXISTS collation_victim_label_uq
+        ON pgc_fixture.collation_victim (label, id);
+END
+$$;
+
+-- ---------- #22 Materialized views needing attention ----------
+-- mv_healthy      : populated + unique index  -> can REFRESH CONCURRENTLY
+-- mv_no_unique    : populated, no unique index -> refresh blocks readers
+-- mv_unpopulated  : created WITH NO DATA       -> querying it errors
+-- mv_stacked      : built on another matview   -> refresh ordering matters
+DROP MATERIALIZED VIEW IF EXISTS pgc_fixture.mv_stacked;
+DROP MATERIALIZED VIEW IF EXISTS pgc_fixture.mv_healthy;
+DROP MATERIALIZED VIEW IF EXISTS pgc_fixture.mv_no_unique;
+DROP MATERIALIZED VIEW IF EXISTS pgc_fixture.mv_unpopulated;
+
+CREATE MATERIALIZED VIEW pgc_fixture.mv_healthy AS
+    SELECT id, email FROM pgc_fixture.accounts;
+CREATE UNIQUE INDEX mv_healthy_id_uq ON pgc_fixture.mv_healthy (id);
+
+CREATE MATERIALIZED VIEW pgc_fixture.mv_no_unique AS
+    SELECT kind, count(*) AS events FROM pgc_fixture.events GROUP BY kind;
+
+CREATE MATERIALIZED VIEW pgc_fixture.mv_unpopulated AS
+    SELECT id, email FROM pgc_fixture.accounts WITH NO DATA;
+
+CREATE MATERIALIZED VIEW pgc_fixture.mv_stacked AS
+    SELECT id FROM pgc_fixture.mv_healthy;
+
+GRANT SELECT ON pgc_fixture.mv_healthy, pgc_fixture.mv_no_unique,
+                pgc_fixture.mv_stacked TO pgc_runner;
+
 -- ---------- Apply first round of SIGHUP-reloadable params ----------
 -- track_counts is still ON here, so the dead-rows counters above persist.
 SELECT pg_reload_conf();

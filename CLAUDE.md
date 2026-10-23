@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project is
 
-`pg_collector.sql` is a **single-file psql script** (~7200 lines on this branch) that queries a running PostgreSQL database and emits an HTML diagnostic report to `<outdir>/pg_collector_<dbname>-<timestamp>.html` (`outdir` defaults to `/tmp`; override with `-v outdir=/path`). It is read-only apart from one `SET statement_timeout` on its own session: it creates no tables, functions, or extensions. There is no build step and no package manager. Tests and CI live in `tests/` and `.github/workflows/` — see [TESTING.md](TESTING.md).
+`pg_collector.sql` is a **single-file psql script** (~7600 lines on this branch) that queries a running PostgreSQL database and emits an HTML diagnostic report to `<outdir>/pg_collector_<dbname>-<timestamp>.html` (`outdir` defaults to `/tmp`; override with `-v outdir=/path`). It is read-only apart from one `SET statement_timeout` on its own session: it creates no tables, functions, or extensions. There is no build step and no package manager. Tests and CI live in `tests/` and `.github/workflows/` — see [TESTING.md](TESTING.md).
 
 ## Running the script
 
@@ -26,7 +26,7 @@ To abort slow queries on a huge catalog: `SET statement_timeout = 30000;` before
 
 ## Versioning / branch policy
 
-Each PostgreSQL major version (PG13+) gets its own branch; `main` targets PG12 and older. **This branch tracks `pg-collector-for-postgresql-19`**, whose script is a different product from `main`'s V3.2 — roughly 7200 lines vs 4000, 74 sections vs 56.
+Each PostgreSQL major version (PG13+) gets its own branch; `main` targets PG12 and older. **This branch tracks `pg-collector-for-postgresql-19`**, whose script is a different product from `main`'s V3.2 — roughly 7600 lines vs 4000, 76 sections vs 56.
 
 The version string appears twice: the script header (line 6) and the rendered report's `<h1>` (line 399). Both must stay in sync with `CHANGELOG.md` when bumping.
 
@@ -40,7 +40,7 @@ Two features from the upstream 2026-06 release change how the script is invoked,
 Reading the whole file linearly is rarely what you want. The big-picture structure is:
 
 1. **Preamble (lines 1–398)** — selective-execution variable parsing and the `-v help=t` block, `SET statement_timeout = '5min'`, psql output config (`\pset format html`, CSS in `\qecho`), filename derivation (`\set filename :DBNAME-\`date ...\``), server-type detection, and the `DB INFO` header. Server type (`Aurora-*`, `RDS-*`, `pg-*`) and DB role (Primary vs Standby) are computed here via `\gset` and emitted into the report.
-2. **Navigation tables (~lines 399–920)** — the partial-report banner (emitted when `fullmod=f`) followed by two HTML tables of `<a href="#anchor">` links. The first is core sections; the second is Amazon Aurora-specific sections. **Every new section must add a TOC entry here and an `<a name="…"></a>` anchor at the section itself**, otherwise it won't be reachable from the report.
+2. **Navigation tables (~lines 399–930)** — the partial-report banner (emitted when `fullmod=f`) followed by two HTML tables of `<a href="#anchor">` links. The first is core sections; the second is Amazon Aurora-specific sections. **Every new section must add a TOC entry here and an `<a name="…"></a>` anchor at the section itself**, otherwise it won't be reachable from the report.
 3. **Observations section (~lines 921–1370)** — automated health check. Each check follows the same pattern:
    ```
    select count(*) > 0 obsrv_<name> from <diagnostic query> \gset
@@ -50,9 +50,9 @@ Reading the whole file linearly is rarely what you want. The big-picture structu
    \endif
    ```
    New checks plug into this block and should cross-link to the detail section that already renders the raw data.
-4. **Detail sections (~lines 1371–5320)** — one section per topic (Database size, Transaction ID, Extensions, Vacuum, Memory, pg_stat_statements, Replication, Sessions, Fragmentation, Duplicate indexes, plus Foreign Servers, Materialized Views, Index Creation Progress and Temp Tables & Files added in the 2026-06 release). Each begins with `\qecho <a name="X"></a>` and a styled `<h1>`/`<h2>` header, then runs SELECTs wrapped in `\qecho <details>…</details>` tags (collapsible since v2.9).
-5. **Aurora and Aurora Limitless sections (~lines 5321–7170)** — gated behind `\gset isaurora` / `\if :isaurora` and `\if :isauroralimitless`. **These gates have no `\else` arm on this branch**: on community PG the sections and their TOC entries are omitted entirely, where `main` printed a "This is not Aurora instance" placeholder. Assertions that key on that placeholder string are wrong here.
-6. **Terminator (lines ~7166–7173)** — resets format, closes output, prints the "Report Generated Successfully" banner. This must stay last.
+4. **Detail sections (~lines 1371–5750)** — one section per topic (Database size, Transaction ID, Extensions, Vacuum, Memory, pg_stat_statements, Replication, Sessions, Fragmentation, Duplicate indexes, plus Foreign Servers, Materialized Views, Index Creation Progress and Temp Tables & Files added in the 2026-06 release, plus Collation / glibc index risk and Partitioning candidates added locally -- the collation one needs PG15+ catalog objects and is ungated, so it must be version-gated before porting to the PG13/PG14 branches). Each begins with `\qecho <a name="X"></a>` and a styled `<h1>`/`<h2>` header, then runs SELECTs wrapped in `\qecho <details>…</details>` tags (collapsible since v2.9).
+5. **Aurora and Aurora Limitless sections (~lines 5751–7600)** — gated behind `\gset isaurora` / `\if :isaurora` and `\if :isauroralimitless`. **These gates have no `\else` arm on this branch**: on community PG the sections and their TOC entries are omitted entirely, where `main` printed a "This is not Aurora instance" placeholder. Assertions that key on that placeholder string are wrong here.
+6. **Terminator (last ~8 lines)** — resets format, closes output, prints the "Report Generated Successfully" banner. This must stay last.
 
 ### Recurring idioms to preserve
 

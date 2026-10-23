@@ -68,10 +68,53 @@ Database Health check list :
    18- Logical replication spill files
    19- Outdated Extensions
    20- Parameters pending restart
+   21- Collation version mismatch (glibc 2.28 / RHEL 7 to RHEL 8 index corruption)
+   22- Materialized views unpopulated or unable to REFRESH CONCURRENTLY
+   23- Large tables that are not partitioned
 ```
 ### Example of The Observations section
 
 <img src="img/Observations_section.png" alt="">
+
+## Sample report
+
+A full report generated against PostgreSQL 19 is checked in at
+[`sample_reports/pg_collector_pg19_sample-2026-10-22.html`](sample_reports/pg_collector_pg19_sample-2026-10-22.html).
+
+GitHub serves `.html` files from a repository as source text rather than
+rendering them, so to view the report as a page either download it and open it
+in a browser, or use the HTML preview proxy:
+
+**[View the sample report rendered](https://htmlpreview.github.io/?https://github.com/awslabs/pg-collector/blob/pg-collector-for-postgresql-19/sample_reports/pg_collector_pg19_sample-2026-10-22.html)**
+
+The sample was produced against a database seeded with `tests/fixtures/`, so it
+deliberately triggers most of the health checks listed above.
+
+### Collation / glibc index risk
+
+Detects indexes left mis-ordered by an operating-system collation change - most
+commonly an in-place RHEL 7 (glibc 2.17) to RHEL 8+ (glibc 2.28) upgrade, where
+sort order changed for most locales. Affected text indexes silently return
+incomplete results, and affected UNIQUE indexes may already hold duplicates.
+
+<img src="img/collation_index_risk.png" alt="Collation / glibc index risk section">
+
+### Partitioning candidates
+
+Ranks unpartitioned tables by size alongside the signals that make declarative
+partitioning pay off: a usable range key, dead-row churn, bulk deletes and
+sequential-scan pressure. The size threshold defaults to 50 GB and is
+configurable with `-v part_min_gb=<n>`.
+
+<img src="img/partitioning_candidates.png" alt="Partitioning candidates section">
+
+### Materialized view health
+
+Reports which materialized views can be refreshed concurrently, the order they
+must be refreshed in when stacked on one another, staleness and bloat
+indicators, and indexes that only cost refresh time.
+
+<img src="img/materialized_views_health.png" alt="Materialized view health section">
 
 ## PG Collector report header 
 <img src="img/pg_collector_header_V2.6.png" alt="">
@@ -230,6 +273,8 @@ PG Collector - Available Sections:
   foreign_servers - Foreign Servers
   pg_shdepend     - pg_shdepend (shared object dependencies)
   fk_no_index     - FK without index
+  collation_risk  - Collation / glibc index risk
+  part_candidates - Partitioning candidates
 
   ---------- Aurora PostgreSQL ----------
   aurora_version          - Aurora version

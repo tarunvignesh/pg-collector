@@ -27,5 +27,37 @@ All notable changes to pg collector will be documented in this file.
    - Changed count(1) to count(1) > 0 to always return a boolean
    - Previously would cause psql error when 2 or more sequences had less than 10% remaining values
 
+6- Added Collation / glibc index risk section (-v collation_risk=t):
+   - Compares pg_collation.collversion and pg_database.datcollversion against
+     the version the operating system currently provides
+   - Lists every index whose key columns use an affected collation, including
+     those using the database default collation, with PRIMARY KEY and UNIQUE
+     entries called out as the urgent cases
+   - Flags a jump across glibc 2.28 as CRITICAL - the RHEL 7 to RHEL 8 boundary
+   - Also reports RANGE/LIST partitioned tables whose partition key is affected,
+     where rows may now route to the wrong partition
+   - New health check: collation version mismatch
+   - Requires PostgreSQL 15 or later for the database-default checks
+
+7- Added Partitioning candidates section (-v part_candidates=t):
+   - Ranks unpartitioned tables by total size with the signals that justify
+     declarative partitioning: date/timestamp range keys, dead rows, bulk
+     deletes and sequential scans
+   - Reports legacy inheritance-based partition parents as conversion candidates
+   - Size threshold configurable with -v part_min_gb=<n> (default 50)
+   - New health check: large tables that are not partitioned
+
+8- Extended the Materialized Views section with health checks:
+   - Refresh readiness - flags views that cannot REFRESH CONCURRENTLY because
+     they have no unique index, and views created WITH NO DATA
+   - Refresh dependency order - shows views built on other materialized views
+   - Staleness and bloat indicators
+   - Unused indexes on materialized views
+   - New health check: materialized views unpopulated or unable to refresh
+     concurrently
+
+9- Added sample_reports/pg_collector_pg19_sample-2026-10-22.html, a full report
+   generated against PostgreSQL 19.
+
 ```
 

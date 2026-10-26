@@ -19,6 +19,10 @@
      │                                                                     │
      │   Severity     → edit RUBRIC[] in <script>                          │
      │                                                                     │
+     │   Traffic      → lamp colors are the --lamp-* tokens in <style>;    │
+     │   light          the lit/dim/off logic is renderVerdict() and the   │
+     │                  headline wording is LABELS.verdictTitle/Blurb.     │
+     │                                                                     │
      │   Section      → edit SECTION_GROUPS[] in <script>                  │
      │   grouping       (sections not listed go to "Other" automatically). │
      │                                                                     │
@@ -26,7 +30,8 @@
      │                  footer note, etc.)                                 │
      │                                                                     │
      │   Initial      → edit DEFAULTS{} in <script> (which severity blocks │
-     │   state          start expanded, hide empty sections, theme).       │
+     │   state          start expanded, hide empty sections, theme, and    │
+     │                  which severity the report opens filtered to).      │
      │                                                                     │
      │   Layout       → search for "// LAYOUT" in <script> and ".app" in   │
      │                  <style>. Most layout decisions are CSS grid.       │
@@ -84,6 +89,23 @@
     --warn-bg: #fff4c8; --warn-fg: #5e3500; --warn-bd: #d4a72c;
     --note-bg: #e0eefb; --note-fg: #0a3a6a; --note-bd: #6cabe2;
     --ok-bg:   #def5e6; --ok-fg:   #103a23; --ok-bd:   #4caf6d;
+
+    /* Traffic-light lamps. These read against the dark housing rather than
+     * against the page, so they are deliberately theme-independent: defined
+     * once here and inherited by every [data-theme] block below, which only
+     * override the tokens they list. Saturated, not pastel -- a lamp has to
+     * look like it is emitting light.
+     *
+     * The third lamp is blue, not green, because this viewer already ties the
+     * notice severity to blue everywhere else (badges, findings blocks). Green
+     * is reserved for the all-clear state, which takes the same bottom socket
+     * when nothing is flagged. Recolor --lamp-note to taste. */
+    --lamp-red:   #e5484d; --lamp-red-dim:   #58242a; --lamp-red-glow:   rgba(229,72,77,.6);
+    --lamp-amber: #f5a524; --lamp-amber-dim: #553a10; --lamp-amber-glow: rgba(245,165,36,.55);
+    --lamp-note:  #4e9bea; --lamp-note-dim:  #1b3450; --lamp-note-glow:  rgba(78,155,234,.5);
+    --lamp-green: #30a46c;                            --lamp-green-glow: rgba(48,164,108,.5);
+    --lamp-housing: #0c1017;
+    --lamp-off:     #272e3b;
 
     /* Effects — M3 elevations 1, 2, 3 */
     --elev-1: 0 1px 2px rgba(15, 26, 42, 0.04), 0 1px 3px rgba(15, 26, 42, 0.06);
@@ -330,32 +352,109 @@
   .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok-bd); }
   .pill.standby .dot { background: var(--note-bd); }
 
-  /* Hero status cards — M3 elevation 1 */
-  .hero {
-    display: grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr));
-    gap: .85rem; margin: 1.5rem 0;
-  }
-  .hero-card {
+  /* ============================================================
+   * Traffic-light verdict + severity filter
+   * ------------------------------------------------------------
+   * The housing is a control, not an ornament. The lamp for the
+   * worst severity present is lit; severities that have findings
+   * but are not the worst glow dim; sockets with nothing in them
+   * stay dark. Clicking a lamp -- or a chip in the row below --
+   * filters the whole report (findings, sidebar, detail sections)
+   * down to that one severity.
+   * ============================================================ */
+  .verdict {
+    display: flex; align-items: center; gap: 1.4rem;
     background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 1.1rem 1.35rem;
-    box-shadow: var(--elev-1);
-    transition: transform .18s ease, box-shadow .18s ease;
+    border-left: 4px solid var(--border); border-radius: var(--radius);
+    padding: 1.2rem 1.4rem; box-shadow: var(--elev-1);
+    margin: 1.5rem 0 .9rem;
   }
-  .hero-card:hover { box-shadow: var(--elev-2); transform: translateY(-1px); }
-  .hero-card.crit { border-left: 3px solid var(--crit-bd); }
-  .hero-card.warn { border-left: 3px solid var(--warn-bd); }
-  .hero-card.note { border-left: 3px solid var(--note-bd); }
-  .hero-card.ok   { border-left: 3px solid var(--ok-bd); }
-  .hero-num {
-    font-size: 2rem; font-weight: 700; line-height: 1; letter-spacing: -.03em;
-    font-feature-settings: "tnum"; /* tabular numerals for alignment */
+  .verdict.crit { border-left-color: var(--lamp-red); }
+  .verdict.warn { border-left-color: var(--lamp-amber); }
+  .verdict.note { border-left-color: var(--lamp-note); }
+  .verdict.ok   { border-left-color: var(--lamp-green); }
+  .verdict-text { min-width: 0; }
+  .verdict-title {
+    font-size: 1.2rem; font-weight: 600; letter-spacing: -.025em;
+    line-height: 1.25; color: var(--text);
   }
-  .hero-num.crit { color: var(--crit-fg); }
-  .hero-num.warn { color: var(--warn-fg); }
-  .hero-num.note { color: var(--note-fg); }
-  .hero-num.ok   { color: var(--ok-fg); }
-  .hero-label { font-size: .82rem; color: var(--muted); margin-top: .35rem;
-                font-weight: 500; }
+  .verdict-blurb { font-size: .86rem; color: var(--muted); line-height: 1.45;
+                   margin-top: .3rem; max-width: 80ch; }
+  .verdict-meta  { font-size: .78rem; color: var(--muted); margin-top: .6rem;
+                   font-feature-settings: "tnum"; }
+  .verdict-meta b { color: var(--text); font-weight: 600; }
+
+  /* Housing — vertical, three sockets, inset so it reads as a recess */
+  .tl {
+    display: flex; flex-direction: column; gap: .4rem; flex: none;
+    padding: .5rem .45rem; border-radius: var(--radius-pill);
+    background: var(--lamp-housing); border: 1px solid rgba(255,255,255,.07);
+    box-shadow: inset 0 1px 4px rgba(0,0,0,.8), 0 1px 2px rgba(0,0,0,.25);
+  }
+  .tl-lamp {
+    display: block; width: 20px; height: 20px; padding: 0; margin: 0;
+    border-radius: 50%; border: 1px solid rgba(0,0,0,.5);
+    background: var(--lamp-off); -webkit-appearance: none; appearance: none;
+    cursor: pointer;
+    transition: background .2s ease, box-shadow .2s ease, transform .12s ease;
+  }
+  .tl-lamp[disabled] { cursor: default; }
+  .tl-lamp:not([disabled]):hover { transform: scale(1.1); }
+  .tl-lamp:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+  /* dim — findings exist here, but a worse severity governs */
+  .tl-lamp.crit.has { background: var(--lamp-red-dim); }
+  .tl-lamp.warn.has { background: var(--lamp-amber-dim); }
+  .tl-lamp.note.has { background: var(--lamp-note-dim); }
+  .tl-lamp.has:not(.lit) { opacity: .8; }
+  /* lit — the governing severity */
+  .tl-lamp.crit.lit { background: var(--lamp-red);
+                      box-shadow: 0 0 12px 3px var(--lamp-red-glow); }
+  .tl-lamp.warn.lit { background: var(--lamp-amber);
+                      box-shadow: 0 0 12px 3px var(--lamp-amber-glow); }
+  .tl-lamp.note.lit { background: var(--lamp-note);
+                      box-shadow: 0 0 12px 3px var(--lamp-note-glow); }
+  .tl-lamp.ok.lit   { background: var(--lamp-green);
+                      box-shadow: 0 0 12px 3px var(--lamp-green-glow); }
+  /* selected as the active filter */
+  .tl-lamp[aria-pressed=true] { outline: 2px solid var(--text); outline-offset: 3px; }
+
+  /* Filter chips — mirror the lamps, with counts and labels */
+  .filters { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
+             margin: 0 0 1.15rem; }
+  .chip {
+    display: inline-flex; align-items: center; gap: .5rem;
+    padding: .42rem .85rem; border-radius: var(--radius-pill);
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); font: inherit; font-size: .82rem; font-weight: 500;
+    cursor: pointer; white-space: nowrap;
+    transition: background .15s ease, border-color .15s ease, color .15s ease;
+  }
+  .chip:hover:not([aria-disabled=true]) { background: var(--surface-2); }
+  .chip:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+  .chip[aria-disabled=true] { opacity: .45; cursor: default; }
+  .chip .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .chip .n   { font-weight: 700; font-feature-settings: "tnum"; }
+  .chip.crit .dot { background: var(--lamp-red); }
+  .chip.warn .dot { background: var(--lamp-amber); }
+  .chip.note .dot { background: var(--lamp-note); }
+  .chip.crit[aria-pressed=true] { background: var(--crit-bg); color: var(--crit-fg);
+                                  border-color: var(--crit-bd); }
+  .chip.warn[aria-pressed=true] { background: var(--warn-bg); color: var(--warn-fg);
+                                  border-color: var(--warn-bd); }
+  .chip.note[aria-pressed=true] { background: var(--note-bg); color: var(--note-fg);
+                                  border-color: var(--note-bd); }
+  .chip.all[aria-pressed=true]  { background: var(--surface-3); border-color: var(--muted);
+                                  font-weight: 600; }
+  .filter-note { font-size: .78rem; color: var(--muted); margin-left: .3rem; }
+
+  @media (max-width: 640px) {
+    .verdict { align-items: flex-start; gap: 1rem; }
+    .tl { flex-direction: row; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tl-lamp, .chip { transition: none; }
+    .tl-lamp:not([disabled]):hover { transform: none; }
+  }
 
   /* Severity blocks (grouped findings) — M3 elevation 1 */
   .sev-block {
@@ -728,11 +827,13 @@
       <span class="pill" id="pill-host"></span>
     </div>
 
-    <!-- Findings come first: critical → warning → notice. Hero counts
-         render below as a sanity-check summary, not as the headline. -->
-    <section id="findings"></section>
+    <!-- Verdict first: the traffic light answers "how bad is it?" before any
+         counts do, and its lamps double as the severity filter for the whole
+         report. Findings follow, critical → warning → notice. -->
+    <section class="verdict" id="verdict"></section>
+    <div class="filters" id="filters"></div>
 
-    <section id="hero" class="hero"></section>
+    <section id="findings"></section>
 
     <section>
       <h2 id="db-overview-heading" style="font-size:1rem;margin:1.5rem 0 .5rem">Database overview</h2>
@@ -952,6 +1053,25 @@ const LABELS = {
   heroNotices: 'Notices',
   heroSections: 'Sections with content',
   noIssues: 'No issues flagged',
+  // Traffic light. One entry per lamp state; the lit lamp picks the headline.
+  verdictTitle: {
+    crit: 'Action required',
+    warn: 'Needs attention',
+    note: 'Minor notices only',
+    ok:   'All clear',
+  },
+  verdictBlurb: {
+    crit: 'Critical findings risk data integrity or availability. Clear these before anything else.',
+    warn: 'Nothing critical. Warnings mark operational degradation that will bite under load.',
+    note: 'Nothing critical and no warnings. The notices are configuration observations worth a glance.',
+    ok:   'No health check fired on this report.',
+  },
+  // Severity filter. {n} / {sev} / {findings} / {sections} are substituted.
+  trafficLight: 'Report status',
+  filterAll: 'All findings',
+  filterHint: 'Click a lamp or a chip to filter the report.',
+  filterNote: 'Filtered to {sev}: {findings} findings in {sections} of {total} sections.',
+  filterNoneLabel: 'nothing flagged',
   whyRubric: 'Why these severities?',
   rubricTitle: 'Severity rubric',
   rubricBlurb: 'Severities are an opinion of this viewer, not the original script. They\'re meant to nudge attention; you should overrule them based on your own context and risk tolerance.',
@@ -965,6 +1085,8 @@ const LABELS = {
 const DEFAULTS = {
   // Severity blocks expanded on initial render
   expandedBlocks: ['crit', 'warn'],
+  // Severity the report opens filtered to: 'crit' | 'warn' | 'note' | null (all)
+  initialFilter: null,
   // Hide sections whose only content is "no X found" placeholder text
   hideEmptySections: true,
   // Initial theme: 'auto' | 'light' | 'dark' | (any custom theme name)
@@ -1441,17 +1563,15 @@ function render(parsed) {
   const counts = { crit: 0, warn: 0, note: 0 };
   for (const c of classified) counts[c.sev]++;
 
-  // Hero
   const visibleSections = parsed.sections.filter(s =>
       !DEFAULTS.hideEmptySections || !s.empty);
-  const heroEl = document.getElementById('hero');
-  heroEl.innerHTML = '';
-  heroEl.appendChild(heroCard('crit', counts.crit, LABELS.heroCritical));
-  heroEl.appendChild(heroCard('warn', counts.warn, LABELS.heroWarnings));
-  heroEl.appendChild(heroCard('note', counts.note, LABELS.heroNotices));
-  heroEl.appendChild(heroCard('ok',
-      Math.max(0, visibleSections.length - classified.length),
-      LABELS.heroSections));
+
+  // Traffic light: the worst severity with findings governs the verdict and
+  // lights its lamp. Nothing flagged at all lights the green all-clear lamp,
+  // which takes the same bottom socket as the notice lamp.
+  const governing = counts.crit ? 'crit' : counts.warn ? 'warn' : counts.note ? 'note' : 'ok';
+  renderVerdict(governing, counts, visibleSections.length);
+  renderFilters(counts);
 
   // Findings — severity-grouped
   const findingsEl = document.getElementById('findings');
@@ -1516,7 +1636,10 @@ function render(parsed) {
   document.getElementById('dropzone').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
 
-  // Wire up search, theme, modal, scroll-spy
+  // Wire up filter, search, theme, modal, scroll-spy
+  view.total = visibleSections.length;
+  wireFilters();
+  setFilter(DEFAULTS.initialFilter);
   wireSearch();
   wireTheme();
   wireRubricModal();
@@ -1533,6 +1656,10 @@ function renderSectionDetail(s, issues) {
     else if (issues.warn) stamp = `<span class="stamp has-issue">${issues.warn} warning${issues.warn > 1 ? 's' : ''}</span>`;
     else if (issues.note) stamp = `<span class="stamp">${issues.note} notice${issues.note > 1 ? 's' : ''}</span>`;
   }
+  // Severities present in this section, so the filter can hide it wholesale.
+  det.dataset.sevs = issues
+    ? SEV_ORDER.filter(sev => issues[sev]).join(' ')
+    : '';
   det.innerHTML = `
     <summary>
       <span class="chev">›</span>
@@ -1997,6 +2124,7 @@ function navLink(section, issues) {
   // dataset attribute reasonable across 56 sections.
   const idxText = (section.title + ' ' + (section.text || '')).toLowerCase();
   a.dataset.search = idxText.length > 50000 ? idxText.slice(0, 50000) : idxText;
+  a.dataset.sevs = issues ? SEV_ORDER.filter(sev => issues[sev]).join(' ') : '';
   let stamp = '';
   if (issues) {
     if (issues.crit)      stamp = `<span class="nav-stamp crit">${issues.crit}</span>`;
@@ -2011,17 +2139,169 @@ function navLink(section, issues) {
   return a;
 }
 
-function heroCard(sev, num, label) {
-  const el = document.createElement('div');
-  el.className = 'hero-card ' + sev;
-  el.innerHTML = `<div class="hero-num ${sev}">${num}</div><div class="hero-label">${escapeHtml(label)}</div>`;
-  return el;
+/* ============================================================
+ * TRAFFIC LIGHT — verdict banner, filter chips, filter engine
+ * ------------------------------------------------------------
+ * `view` is the single source of truth for what is visible:
+ * a severity filter (null = everything) and the sidebar search
+ * query. Both the lamps and the chips write to it; applyView()
+ * is the only thing that reads it and touches the DOM.
+ * ============================================================ */
+
+const SEV_ORDER = ['crit', 'warn', 'note'];
+const view = { sev: null, q: '', total: 0 };
+
+function sevLabel(sev) {
+  return { crit: LABELS.heroCritical, warn: LABELS.heroWarnings,
+           note: LABELS.heroNotices }[sev] || sev;
+}
+
+/* Substitute {placeholders} in a LABELS template. */
+function fmt(tpl, vals) {
+  return String(tpl).replace(/\{(\w+)\}/g,
+      (m, k) => (k in vals ? String(vals[k]) : m));
+}
+
+function renderVerdict(governing, counts, sectionCount) {
+  const el = document.getElementById('verdict');
+  el.className = 'verdict ' + governing;
+
+  // Three sockets, always in the same order. The bottom one carries the
+  // notice lamp normally and the green all-clear lamp when nothing fired.
+  const lamps = SEV_ORDER.map(sev => {
+    const n = counts[sev];
+    // With nothing flagged, the bottom socket becomes the all-clear lamp:
+    // green, lit, and not a filter (there is nothing to filter to).
+    if (sev === 'note' && governing === 'ok') {
+      return `<span class="tl-lamp ok lit" role="img"
+                    aria-label="${escapeHtml(LABELS.noIssues)}"
+                    title="${escapeHtml(LABELS.noIssues)}"></span>`;
+    }
+    const cls = ['tl-lamp', sev, n ? 'has' : '', sev === governing ? 'lit' : '']
+        .filter(Boolean).join(' ');
+    const label = n + ' ' + sevLabel(sev).toLowerCase();
+    return `<button type="button" class="${cls}" data-sev="${sev}"
+                    aria-pressed="false" aria-label="${escapeHtml(label)}"
+                    title="${escapeHtml(label)}"${n ? '' : ' disabled'}></button>`;
+  }).join('');
+
+  const parts = SEV_ORDER
+      .filter(sev => counts[sev])
+      .map(sev => `<b>${counts[sev]}</b> ${escapeHtml(sevLabel(sev).toLowerCase())}`);
+  const tally = parts.length ? parts.join(' · ') : escapeHtml(LABELS.filterNoneLabel);
+
+  el.innerHTML = `
+    <div class="tl" role="group" aria-label="${escapeHtml(LABELS.trafficLight)}">${lamps}</div>
+    <div class="verdict-text">
+      <div class="verdict-title">${escapeHtml(LABELS.verdictTitle[governing])}</div>
+      <div class="verdict-blurb">${escapeHtml(LABELS.verdictBlurb[governing])}</div>
+      <div class="verdict-meta">${tally} · <b>${sectionCount}</b> ${escapeHtml(LABELS.heroSections.toLowerCase())}</div>
+    </div>`;
+}
+
+function renderFilters(counts) {
+  const el = document.getElementById('filters');
+  const total = counts.crit + counts.warn + counts.note;
+  const chip = (sev, label, n) => {
+    const disabled = n === 0;
+    return `<button type="button" class="chip ${sev}" data-sev="${sev}"
+                    aria-pressed="false"${disabled ? ' aria-disabled="true"' : ''}>
+              ${sev === 'all' ? '' : '<span class="dot"></span>'}
+              <span>${escapeHtml(label)}</span><span class="n">${n}</span>
+            </button>`;
+  };
+  el.innerHTML =
+      chip('all', LABELS.filterAll, total) +
+      SEV_ORDER.map(sev => chip(sev, sevLabel(sev), counts[sev])).join('') +
+      `<span class="filter-note" id="filter-note">${escapeHtml(LABELS.filterHint)}</span>`;
+}
+
+function wireFilters() {
+  // One handler per container; lamps and chips carry the same data-sev.
+  for (const id of ['verdict', 'filters']) {
+    document.getElementById(id).addEventListener('click', e => {
+      const btn = e.target.closest('[data-sev]');
+      if (!btn || btn.disabled || btn.getAttribute('aria-disabled') === 'true') return;
+      const sev = btn.dataset.sev;
+      // Clicking the active severity (or "all") clears the filter.
+      setFilter(sev === 'all' || sev === view.sev ? null : sev);
+    });
+  }
+}
+
+function setFilter(sev) {
+  view.sev = SEV_ORDER.includes(sev) ? sev : null;
+  // Opening a filtered severity collapsed would hide the only thing on screen.
+  if (view.sev) {
+    const block = document.querySelector(`.sev-block[data-sev="${view.sev}"]`);
+    if (block) block.classList.remove('collapsed');
+  }
+  applyView();
+}
+
+/* The only place visibility is decided. Findings and detail sections answer to
+ * the severity filter; sidebar links answer to both it and the search box. */
+function applyView() {
+  const sev = view.sev;
+  const q = view.q;
+  const matchesSev = el => !sev || (el.dataset.sevs || '').split(' ').includes(sev);
+
+  for (const block of document.querySelectorAll('#findings .sev-block')) {
+    block.classList.toggle('hidden', !!sev && block.dataset.sev !== sev);
+  }
+
+  let shownSections = 0;
+  for (const det of document.querySelectorAll('#sections .section')) {
+    const show = matchesSev(det);
+    det.classList.toggle('hidden', !show);
+    if (show) shownSections++;
+  }
+
+  // Sidebar: a link survives only if it passes the filter and the search.
+  const navEl = document.getElementById('sidebar-nav');
+  for (const child of navEl.children) {
+    if (child.tagName !== 'A') continue;
+    const show = matchesSev(child) && (!q || child.dataset.search.includes(q));
+    child.classList.toggle('hidden', !show);
+  }
+  // Group headings disappear once their whole group is hidden.
+  let head = null, groupHasVisible = false;
+  const flush = () => { if (head) head.classList.toggle('hidden', !groupHasVisible); };
+  for (const child of navEl.children) {
+    if (child.classList.contains('sidebar-section')) {
+      flush(); head = child; groupHasVisible = false;
+    } else if (child.tagName === 'A' && !child.classList.contains('hidden')) {
+      groupHasVisible = true;
+    }
+  }
+  flush();
+
+  // Reflect the state on every control that can set it.
+  for (const el of document.querySelectorAll('[data-sev]')) {
+    const isAll = el.dataset.sev === 'all';
+    el.setAttribute('aria-pressed', String(isAll ? !sev : el.dataset.sev === sev));
+  }
+
+  const note = document.getElementById('filter-note');
+  if (note) {
+    if (!sev) {
+      note.textContent = LABELS.filterHint;
+    } else {
+      const findings = document.querySelectorAll(
+          `#findings .sev-block[data-sev="${sev}"] .obs`).length;
+      note.textContent = fmt(LABELS.filterNote, {
+        sev: sevLabel(sev).toLowerCase(), findings,
+        sections: shownSections, total: view.total,
+      });
+    }
+  }
 }
 
 function severityBlock(sev, items) {
   const block = document.createElement('div');
   const expanded = (DEFAULTS.expandedBlocks || []).includes(sev);
   block.className = 'sev-block ' + sev + (expanded ? '' : ' collapsed');
+  block.dataset.sev = sev;
   const sevLabel = { crit: LABELS.heroCritical, warn: LABELS.heroWarnings, note: LABELS.heroNotices }[sev];
   const sevIcon  = { crit: '⛔', warn: '⚠', note: 'ⓘ' }[sev];
   block.innerHTML = `
@@ -2053,32 +2333,10 @@ function severityBlock(sev, items) {
 }
 
 function wireSearch() {
-  const navEl = document.getElementById('sidebar-nav');
   const searchEl = document.getElementById('search');
   searchEl.addEventListener('input', () => {
-    const q = searchEl.value.toLowerCase().trim();
-    // Pass 1: show/hide each link based on full-text match
-    for (const child of navEl.children) {
-      if (child.tagName === 'A') {
-        child.classList.toggle('hidden', q && !child.dataset.search.includes(q));
-      }
-    }
-    // Pass 2: hide group headings whose entire group is now hidden
-    let currentHead = null;
-    let groupHasVisible = false;
-    const flush = () => {
-      if (currentHead) currentHead.classList.toggle('hidden', q && !groupHasVisible);
-    };
-    for (const child of navEl.children) {
-      if (child.classList.contains('sidebar-section')) {
-        flush();
-        currentHead = child;
-        groupHasVisible = false;
-      } else if (child.tagName === 'A') {
-        if (!child.classList.contains('hidden')) groupHasVisible = true;
-      }
-    }
-    flush();
+    view.q = searchEl.value.toLowerCase().trim();
+    applyView();   // composes the query with the active severity filter
   });
 }
 

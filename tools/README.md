@@ -5,14 +5,18 @@ None of these modify `pg_collector.sql`.
 
 ## `enhance.html` — modern viewer
 
-One file. ~51 KB. No dependencies — no Node, no Python, no npm, no CDN,
+One file. ~110 KB. No dependencies — no Node, no Python, no npm, no CDN,
 no `<script src>`, no `import`, no build step. Pure HTML + CSS +
 browser-native JavaScript. Works offline forever.
 
 Drop a `pg_collector_*.html` report onto it (or pass `?report=URL`) and
 it renders a modern UI on top of the existing report DOM:
 
-- Hero stats (critical / warning / notice counts) above the fold
+- A traffic light at the top: the lamp for the worst severity present is
+  lit, severities that have findings but are not the worst glow dim, and
+  empty sockets stay dark — so the verdict lands before any number does
+- One-click severity filter: click a lamp (or a chip) and the findings,
+  the sidebar and the detail sections all collapse to that severity
 - Severity-grouped findings with rationale tooltips
 - Sticky sidebar with section grouping, search, and scroll-spy
 - Restyled tables, dark/light/auto theme, in-browser only (no upload)
@@ -144,9 +148,45 @@ Edit `DEFAULTS`:
 ```js
 const DEFAULTS = {
   expandedBlocks: ['crit', 'warn'],   // which severity blocks open by default
+  initialFilter: null,                // 'crit' | 'warn' | 'note' | null (all)
   hideEmptySections: true,            // suppress "No X found" sections
   initialTheme: 'auto',               // 'auto' | 'light' | 'dark' | <custom>
 };
+```
+
+Set `initialFilter: 'crit'` to have the report open showing only the
+critical findings and only the sections they point at — useful if you
+hand the viewer to someone who should triage before they browse.
+
+#### Recipe: recolor the traffic light
+
+The lamps are deliberately theme-independent: they have to read as
+emitted light against the dark housing, so they are defined once in the
+base `:root` and inherited by every `[data-theme]` block.
+
+```css
+  --lamp-red:   #e5484d; --lamp-red-dim:   #58242a; --lamp-red-glow:   rgba(229,72,77,.6);
+  --lamp-amber: #f5a524; --lamp-amber-dim: #553a10; --lamp-amber-glow: rgba(245,165,36,.55);
+  --lamp-note:  #4e9bea; --lamp-note-dim:  #1b3450; --lamp-note-glow:  rgba(78,155,234,.5);
+  --lamp-green: #30a46c;                            --lamp-green-glow: rgba(48,164,108,.5);
+  --lamp-housing: #0c1017;   /* the dark surround */
+  --lamp-off:     #272e3b;   /* a socket with nothing in it */
+```
+
+The `-dim` variant is the lamp when that severity has findings but a
+worse one governs; the `-glow` variant is the halo on the lit lamp.
+The third lamp is blue rather than green because the viewer already ties
+the notice severity to blue everywhere else — green is reserved for the
+all-clear state, which takes the same bottom socket when nothing fired.
+Recolor `--lamp-note` to `--lamp-green` if you prefer a literal RAG
+traffic light.
+
+The headline above the lamps comes from `LABELS.verdictTitle` and
+`LABELS.verdictBlurb`, keyed by `crit` / `warn` / `note` / `ok`:
+
+```js
+  verdictTitle: { crit: 'Action required', warn: 'Needs attention',
+                  note: 'Minor notices only', ok: 'All clear' },
 ```
 
 #### Recipe: change the layout
@@ -174,7 +214,8 @@ right below — adjust `max-width: 900px` to taste.
   APP SHELL             ← layout grid
   SIDEBAR
   MAIN content
-  HERO / SEV BLOCKS
+  TRAFFIC LIGHT        ← verdict banner, lamps, filter chips
+  SEV BLOCKS
   DB OVERVIEW
   SECTION RESTYLE       ← restyled psql tables
   RUBRIC MODAL
@@ -213,8 +254,10 @@ are required — reloading the browser with devtools open shows the same
 errors. Examples:
 
 ```bash
-node --check tools/enhance.html        # node treats <script> contents as JS — works for syntax
-deno check  tools/enhance.html         # if you have deno
+# Slice the <script> block out and hand that to the engine -- node refuses
+# a .html file outright, and the HTML around the script is not valid JS.
+sed -n "/^<script>$/,/^<\/script>$/p" tools/enhance.html \
+  | sed '1d;$d' > /tmp/enhance.js && node --check /tmp/enhance.js
 ```
 
 Visual changes need eyeballs — there's no automated regression suite
@@ -234,4 +277,4 @@ To keep the lightweight promise, some things are deliberately out of scope:
   is 100% local.
 
 If you want any of those, fork and add them — but consider whether the
-51 KB / zero-deps property is worth keeping first.
+110 KB / zero-deps property is worth keeping first.

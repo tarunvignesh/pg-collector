@@ -264,6 +264,15 @@ Visual changes need eyeballs — there's no automated regression suite
 for the viewer (yet). If you add one, drop it in
 `tests/test_viewer.js` and we'll wire it into CI.
 
+#### Regenerating the README GIF
+
+`img/enhance_traffic_light.gif` in the root README is driven by
+`tools/gif-capture.html`, a maintainer-only harness that loads the viewer
+in an iframe and replays a fixed storyboard. Frame N replays actions
+1..N from a cold load, so frames never depend on capture timing. The
+full chromium + ffmpeg recipe is in a comment at the top of that file.
+Edit the `STORY` array to change what the GIF demonstrates.
+
 ### What this viewer is *not*
 
 To keep the lightweight promise, some things are deliberately out of scope:

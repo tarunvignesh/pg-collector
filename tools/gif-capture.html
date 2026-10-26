@@ -1,0 +1,86 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>enhance.html — GIF capture harness</title>
+<!-- Maintainer tool, not part of the viewer. Drives tools/enhance.html through
+     a fixed storyboard so img/enhance_traffic_light.gif in the README can be
+     regenerated deterministically instead of being a mystery binary.
+
+     Each frame replays actions 1..N from a cold load, so a frame never depends
+     on capture timing. Regenerate (needs chromium and ffmpeg):
+
+       python3 -m http.server 8731 &
+       for i in $(seq 0 9); do
+         chromium --headless --disable-gpu --hide-scrollbars \
+           --virtual-time-budget=20000 --window-size=1280,760 \
+           --screenshot=frames/f$(printf %02d $i).png \
+           "http://127.0.0.1:8731/tools/gif-capture.html?step=$i&theme=dark"
+       done
+       # list.txt: one `file frames/fNN.png` + `duration <secs>` pair per frame
+       ffmpeg -f concat -safe 0 -i list.txt -vf \
+         "scale=1100:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128[p];[s1][p]paletteuse=dither=bayer:bayer_scale=3" \
+         -loop 0 img/enhance_traffic_light.gif
+-->
+<style>
+  html,body{margin:0;height:100%;background:#0a1018}
+  iframe{border:0;width:100vw;height:100vh;display:block}
+  #cap{
+    position:fixed; left:50%; bottom:18px; transform:translateX(-50%);
+    background:rgba(10,14,22,.93); color:#e8edf4; border:1px solid rgba(255,255,255,.14);
+    padding:.55rem 1.1rem; border-radius:999px; font:500 15px/1.3 system-ui,sans-serif;
+    box-shadow:0 6px 24px rgba(0,0,0,.5); white-space:nowrap; letter-spacing:-.01em;
+  }
+</style>
+<iframe id="f" src="enhance.html?report=../sample_reports/pg_collector_pg19_sample-2026-10-22.html"></iframe>
+<div id="cap"></div>
+<script>
+const step = parseInt(new URLSearchParams(location.search).get('step') || '0', 10);
+const theme = new URLSearchParams(location.search).get('theme') || 'dark';
+const f = document.getElementById('f');
+
+// Each entry: what to do to reach this frame, and the caption shown on it.
+// Actions are cumulative -- frame N replays actions 1..N, so every frame is
+// reproducible from a cold load and the capture needs no timing luck.
+const STORY = [
+  {cap: 'Drop a pg_collector report in — the traffic light is the verdict'},
+  {cap: 'Red lamp lit: 3 critical findings. The lamps are the filter.'},
+  {act: d => d.querySelector('.chip[data-sev="crit"]').click(),
+   cap: 'Critical only — findings, sidebar and detail sections all narrow'},
+  {act: d => { const el = d.getElementById('sections');
+               const y = el.getBoundingClientRect().top + d.defaultView.scrollY;
+               d.defaultView.scrollTo(0, y - 150); },
+   cap: 'Only the 3 sections those findings point at are left'},
+  {act: d => { d.defaultView.scrollTo(0, 0);
+               d.querySelector('.chip[data-sev="warn"]').click(); },
+   cap: 'Amber: 7 warnings across 5 sections'},
+  {act: d => d.querySelector('.tl-lamp[data-sev="note"]').click(),
+   cap: 'Clicking the lamp itself works the same way'},
+  {act: d => d.querySelector('.chip[data-sev="all"]').click(),
+   cap: 'Back to everything'},
+  {act: d => { const s = d.getElementById('search'); s.value = 'vacuum';
+               s.dispatchEvent(new d.defaultView.Event('input')); },
+   cap: 'Search the full text of every section'},
+  {act: d => d.querySelector('.chip[data-sev="warn"]').click(),
+   cap: 'Search and severity filter compose'},
+  {act: d => { const s = d.getElementById('search'); s.value = '';
+               s.dispatchEvent(new d.defaultView.Event('input'));
+               d.querySelector('.chip[data-sev="all"]').click(); },
+   cap: 'Nothing is uploaded — it all runs in the browser'},
+];
+
+let tries = 0;
+function go() {
+  const d = f.contentDocument;
+  const ready = d && d.getElementById('app') && !d.getElementById('app').classList.contains('hidden');
+  if (!ready) {
+    if (++tries > 200) { document.getElementById('cap').textContent = 'LOAD FAILED'; return; }
+    return setTimeout(go, 100);
+  }
+  d.body.dataset.theme = theme;
+  for (let i = 0; i <= step && i < STORY.length; i++) {
+    if (STORY[i].act) STORY[i].act(d);
+  }
+  document.getElementById('cap').textContent = STORY[Math.min(step, STORY.length - 1)].cap;
+  document.title = 'frame-ready';
+}
+go();
+</script>

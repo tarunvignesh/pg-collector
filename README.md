@@ -5,6 +5,7 @@
 - [PG Collector's Automated Database Health check](#pg-collectors-automated-database-health-check)
 - [PG Collector report header](#pg-collector-report-header)
 - [Example of PG Collector report](#example-of-pg-collector-report)
+- [Modern viewer: traffic-light report](#modern-viewer-traffic-light-report)
 - [PG Collector output](#pg-collector-output)
 - [How to run PG Collector script](#how-to-run-pg-collector-script--pg_collectorsql-)
 - [Selective Section Execution](#selective-section-execution)
@@ -115,6 +116,54 @@ must be refreshed in when stacked on one another, staleness and bloat
 indicators, and indexes that only cost refresh time.
 
 <img src="img/materialized_views_health.png" alt="Materialized view health section">
+
+## Modern viewer: traffic-light report
+
+[`tools/enhance.html`](tools/enhance.html) is a single static HTML file that
+renders any `pg_collector_*.html` report as a modern, filterable page. It reads
+the report in your browser - nothing is uploaded, and the original file is not
+modified. No Node, no Python, no npm, no CDN, no build step.
+
+![Traffic-light view of a pg_collector report: filtering by critical, warning and notice, and searching sections](img/enhance_traffic_light.gif)
+
+What it adds on top of the raw report:
+
+- **Traffic light verdict.** The lamp for the worst severity present is lit -
+  red for critical, amber for warning, blue for notice, green when nothing
+  fired - with a headline that says what to do about it (*Action required*,
+  *Needs attention*, *Minor notices only*, *All clear*) rather than a row of
+  numbers you have to rank yourself.
+- **Severity filtering.** Click a lamp or a chip and the whole report narrows
+  to that severity: the findings, the sidebar, and the detail sections. Click
+  it again, or *All findings*, to clear.
+- **Full-text search** across every section, which composes with the active
+  severity filter.
+- **Severity rubric.** Every classification is an opinion of the viewer, not of
+  the script; the sidebar links to the full rubric with the reasoning for each
+  check, and the rubric is a plain array you can edit.
+- **Grouped sidebar** with scroll-spy, **sortable tables** with numeric columns
+  right-aligned, size-column bar charts, a `pgtune`-style view of
+  `DB parameters`, and light / dark / auto themes.
+
+Open it and drag a report onto the page:
+
+```bash
+xdg-open tools/enhance.html      # or just double-click the file
+```
+
+The `?report=URL` query parameter auto-loads a report instead, which needs any
+static HTTP server because browsers block cross-origin `file://` fetches:
+
+```bash
+python3 -m http.server 8770
+# then visit:
+# http://127.0.0.1:8770/tools/enhance.html?report=/sample_reports/pg_collector_pg19_sample-2026-10-22.html
+```
+
+Severity classification, section grouping, wording and initial state are all
+config arrays at the top of the file - see [tools/README.md](tools/README.md)
+for worked examples, and [tools/CUSTOMIZING.md](tools/CUSTOMIZING.md) for
+making a newly added report section render well in it.
 
 ## PG Collector report header 
 <img src="img/pg_collector_header_V2.6.png" alt="">
@@ -452,7 +501,7 @@ PGHOST=localhost PGUSER=postgres \
     ./tests/run.sh --isolate --seed populated --with-pgss --with-aurora-mock
 ```
 
-CI runs the same harness in a GitHub Actions matrix (PG12–17 ×
+CI runs the same harness in a GitHub Actions matrix (PG 17 / 18 / 19beta3 ×
 pgss on/off × seed empty/populated × aurora none/mocked).
 
 - [TESTING.md](TESTING.md) — what each test proves, in plain English.

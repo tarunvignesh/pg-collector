@@ -80,8 +80,10 @@ The suite is in `tests/`, documented in [TESTING.md](TESTING.md) (what each chec
 proves), `tests/README.md` (how to run it) and `tests/DESIGN.md` (why it is built
 this way). Two layers:
 
-- **Static lint**, no database — `tests/lint/check_{safety,toc,if_endif,dialect}.py`.
+- **Static lint**, no database — `tests/lint/check_{safety,toc,if_endif,dialect,div_by_zero}.py`.
   `check_dialect.py` needs `pglast`; the rest are stdlib-only.
+  `check_div_by_zero.py` imports `tokenize` from `check_safety.py`, so it must
+  stay in the same directory.
 - **Runtime**, needs a database — `tests/run.sh` seeds `tests/fixtures/`, runs the
   script, and applies `tests/report_assertions.py` to the generated HTML.
 

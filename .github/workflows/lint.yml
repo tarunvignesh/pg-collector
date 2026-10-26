@@ -29,3 +29,6 @@ jobs:
 
       - name: Dialect parse (libpg_query)
         run: python tests/lint/check_dialect.py pg_collector.sql
+
+      - name: Division-by-zero guards (upstream #10)
+        run: python tests/lint/check_div_by_zero.py pg_collector.sql

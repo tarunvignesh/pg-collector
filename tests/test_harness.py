@@ -36,6 +36,7 @@ LINT_CHECKERS = [
     "check_toc.py",
     "check_if_endif.py",
     "check_dialect.py",
+    "check_div_by_zero.py",
 ]
 
 

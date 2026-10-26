@@ -1735,14 +1735,14 @@ SELECT p.pid, now() - a.xact_start AS duration, coalesce(wait_event_type ||'.'||
   pg_size_pretty(pg_total_relation_size(p.relid)) AS total_size, 
   pg_size_pretty(p.heap_blks_scanned * current_setting('block_size')::int) AS scanned, 
   pg_size_pretty(p.heap_blks_vacuumed * current_setting('block_size')::int) AS vacuumed, 
-  round(100.0 * p.heap_blks_scanned / p.heap_blks_total, 1) AS scanned_pct, 
-  round(100.0 * p.heap_blks_vacuumed / p.heap_blks_total, 1) AS vacuumed_pct, 
+  round(100.0 * p.heap_blks_scanned / nullif(p.heap_blks_total, 0), 1) AS scanned_pct, 
+  round(100.0 * p.heap_blks_vacuumed / nullif(p.heap_blks_total, 0), 1) AS vacuumed_pct, 
   p.index_vacuum_count,
   p.max_dead_tuple_bytes as dead_tuple_data_per_cycle,
   s.n_dead_tup as total_num_dead_tuples ,
   indexes_total as total_indexes_to_vacuum,
   indexes_processed as total_indexes_processed,
-  ceil(p.dead_tuple_bytes::float/p.max_dead_tuple_bytes::float) index_cycles_required
+  ceil(p.dead_tuple_bytes::float/nullif(p.max_dead_tuple_bytes::float, 0)) index_cycles_required
 FROM pg_stat_progress_vacuum p JOIN pg_stat_activity a using (pid) 
      join pg_stat_all_tables s on s.relid = p.relid
 ORDER BY now() - a.xact_start DESC;
@@ -1834,6 +1834,8 @@ SELECT name,setting,source,sourcefile from pg_settings where name ='maintenance_
 WITH vbt AS (SELECT setting AS autovacuum_vacuum_threshold FROM pg_settings WHERE name = 'autovacuum_vacuum_threshold')
     , vsf AS (SELECT setting AS autovacuum_vacuum_scale_factor FROM pg_settings WHERE name = 'autovacuum_vacuum_scale_factor')
     , fma AS (SELECT setting AS autovacuum_freeze_max_age FROM pg_settings WHERE name = 'autovacuum_freeze_max_age')
+    , vit AS (SELECT setting AS autovacuum_vacuum_insert_threshold FROM pg_settings WHERE name = 'autovacuum_vacuum_insert_threshold')
+    , visf AS (SELECT setting AS autovacuum_vacuum_insert_scale_factor FROM pg_settings WHERE name = 'autovacuum_vacuum_insert_scale_factor')
     , sto AS (select opt_oid, split_part(setting, '=', 1) as param, split_part(setting, '=', 2) as value from (select oid opt_oid, unnest(reloptions) setting from pg_class) opt)
 SELECT
     '"'||ns.nspname||'"."'||c.relname||'"' as relation
@@ -1842,17 +1844,26 @@ SELECT
     , coalesce(cfma.value::float, autovacuum_freeze_max_age::float) autovacuum_freeze_max_age
     , (coalesce(cvbt.value::float, autovacuum_vacuum_threshold::float) + coalesce(cvsf.value::float,autovacuum_vacuum_scale_factor::float) * c.reltuples) as autovacuum_vacuum_tuples
     , n_dead_tup as dead_tuples
+    , case when coalesce(cvit.value::float, autovacuum_vacuum_insert_threshold::float) < 0 then null
+           else coalesce(cvit.value::float, autovacuum_vacuum_insert_threshold::float) + coalesce(cvisf.value::float, autovacuum_vacuum_insert_scale_factor::float) * c.reltuples
+      end as autovacuum_vacuum_insert_tuples
+    , n_ins_since_vacuum as inserts_since_vacuum
 FROM pg_class c join pg_namespace ns on ns.oid = c.relnamespace
 join pg_stat_all_tables stat on stat.relid = c.oid
-join vbt on (1=1) join vsf on (1=1) join fma on (1=1)
+join vbt on (1=1) join vsf on (1=1) join fma on (1=1) join vit on (1=1) join visf on (1=1)
 left join sto cvbt on cvbt.param = 'autovacuum_vacuum_threshold' and c.oid = cvbt.opt_oid
 left join sto cvsf on cvsf.param = 'autovacuum_vacuum_scale_factor' and c.oid = cvsf.opt_oid
 left join sto cfma on cfma.param = 'autovacuum_freeze_max_age' and c.oid = cfma.opt_oid
+left join sto cvit on cvit.param = 'autovacuum_vacuum_insert_threshold' and c.oid = cvit.opt_oid
+left join sto cvisf on cvisf.param = 'autovacuum_vacuum_insert_scale_factor' and c.oid = cvisf.opt_oid
 WHERE c.relkind = 'r' and nspname <> 'pg_catalog'
 and (
     age(relfrozenxid) >= coalesce(cfma.value::float, autovacuum_freeze_max_age::float)
     or
     coalesce(cvbt.value::float, autovacuum_vacuum_threshold::float) + coalesce(cvsf.value::float,autovacuum_vacuum_scale_factor::float) * c.reltuples <= n_dead_tup
+    or
+    (coalesce(cvit.value::float, autovacuum_vacuum_insert_threshold::float) >= 0
+     and coalesce(cvit.value::float, autovacuum_vacuum_insert_threshold::float) + coalesce(cvisf.value::float, autovacuum_vacuum_insert_scale_factor::float) * c.reltuples <= n_ins_since_vacuum)
    -- or 1 = 1
 )
 ORDER BY age(relfrozenxid) DESC ;
@@ -2060,14 +2071,14 @@ SELECT p.pid, now() - a.xact_start AS duration, coalesce(wait_event_type ||'.'||
   pg_size_pretty(pg_total_relation_size(p.relid)) AS total_size, 
   pg_size_pretty(p.heap_blks_scanned * current_setting('block_size')::int) AS scanned, 
   pg_size_pretty(p.heap_blks_vacuumed * current_setting('block_size')::int) AS vacuumed, 
-  round(100.0 * p.heap_blks_scanned / p.heap_blks_total, 1) AS scanned_pct, 
-  round(100.0 * p.heap_blks_vacuumed / p.heap_blks_total, 1) AS vacuumed_pct, 
+  round(100.0 * p.heap_blks_scanned / nullif(p.heap_blks_total, 0), 1) AS scanned_pct, 
+  round(100.0 * p.heap_blks_vacuumed / nullif(p.heap_blks_total, 0), 1) AS vacuumed_pct, 
   p.index_vacuum_count,
   p.max_dead_tuple_bytes as dead_tuple_data_per_cycle,
   s.n_dead_tup as total_num_dead_tuples ,
   indexes_total as total_indexes_to_vacuum,
   indexes_processed as total_indexes_processed,
-  ceil(p.dead_tuple_bytes::float/p.max_dead_tuple_bytes::float) index_cycles_required
+  ceil(p.dead_tuple_bytes::float/nullif(p.max_dead_tuple_bytes::float, 0)) index_cycles_required
 FROM pg_stat_progress_vacuum p JOIN pg_stat_activity a using (pid) 
      join pg_stat_all_tables s on s.relid = p.relid
 ORDER BY now() - a.xact_start DESC;
@@ -2100,6 +2111,8 @@ select to_char(last_autoanalyze, 'YYYY-MM-DD') as date , count(*) as table_count
 WITH vbt AS (SELECT setting AS autovacuum_vacuum_threshold FROM pg_settings WHERE name = 'autovacuum_vacuum_threshold')
     , vsf AS (SELECT setting AS autovacuum_vacuum_scale_factor FROM pg_settings WHERE name = 'autovacuum_vacuum_scale_factor')
     , fma AS (SELECT setting AS autovacuum_freeze_max_age FROM pg_settings WHERE name = 'autovacuum_freeze_max_age')
+    , vit AS (SELECT setting AS autovacuum_vacuum_insert_threshold FROM pg_settings WHERE name = 'autovacuum_vacuum_insert_threshold')
+    , visf AS (SELECT setting AS autovacuum_vacuum_insert_scale_factor FROM pg_settings WHERE name = 'autovacuum_vacuum_insert_scale_factor')
     , sto AS (select opt_oid, split_part(setting, '=', 1) as param, split_part(setting, '=', 2) as value from (select oid opt_oid, unnest(reloptions) setting from pg_class) opt)
 SELECT
     '"'||ns.nspname||'"."'||c.relname||'"' as relation
@@ -2108,17 +2121,26 @@ SELECT
     , coalesce(cfma.value::float, autovacuum_freeze_max_age::float) autovacuum_freeze_max_age
     , (coalesce(cvbt.value::float, autovacuum_vacuum_threshold::float) + coalesce(cvsf.value::float,autovacuum_vacuum_scale_factor::float) * c.reltuples) as autovacuum_vacuum_tuples
     , n_dead_tup as dead_tuples
+    , case when coalesce(cvit.value::float, autovacuum_vacuum_insert_threshold::float) < 0 then null
+           else coalesce(cvit.value::float, autovacuum_vacuum_insert_threshold::float) + coalesce(cvisf.value::float, autovacuum_vacuum_insert_scale_factor::float) * c.reltuples
+      end as autovacuum_vacuum_insert_tuples
+    , n_ins_since_vacuum as inserts_since_vacuum
 FROM pg_class c join pg_namespace ns on ns.oid = c.relnamespace
 join pg_stat_all_tables stat on stat.relid = c.oid
-join vbt on (1=1) join vsf on (1=1) join fma on (1=1)
+join vbt on (1=1) join vsf on (1=1) join fma on (1=1) join vit on (1=1) join visf on (1=1)
 left join sto cvbt on cvbt.param = 'autovacuum_vacuum_threshold' and c.oid = cvbt.opt_oid
 left join sto cvsf on cvsf.param = 'autovacuum_vacuum_scale_factor' and c.oid = cvsf.opt_oid
 left join sto cfma on cfma.param = 'autovacuum_freeze_max_age' and c.oid = cfma.opt_oid
+left join sto cvit on cvit.param = 'autovacuum_vacuum_insert_threshold' and c.oid = cvit.opt_oid
+left join sto cvisf on cvisf.param = 'autovacuum_vacuum_insert_scale_factor' and c.oid = cvisf.opt_oid
 WHERE c.relkind = 'r' and nspname <> 'pg_catalog'
 and (
     age(relfrozenxid) >= coalesce(cfma.value::float, autovacuum_freeze_max_age::float)
     or
     coalesce(cvbt.value::float, autovacuum_vacuum_threshold::float) + coalesce(cvsf.value::float,autovacuum_vacuum_scale_factor::float) * c.reltuples <= n_dead_tup
+    or
+    (coalesce(cvit.value::float, autovacuum_vacuum_insert_threshold::float) >= 0
+     and coalesce(cvit.value::float, autovacuum_vacuum_insert_threshold::float) + coalesce(cvisf.value::float, autovacuum_vacuum_insert_scale_factor::float) * c.reltuples <= n_ins_since_vacuum)
    -- or 1 = 1
 )
 ORDER BY age(relfrozenxid) DESC LIMIT 50;
@@ -2298,7 +2320,7 @@ select name as parameter_name,setting  FROM pg_catalog.pg_settings WHERE name in
 \qecho <br>
 \qecho cache read hit for the whole instance
 select 
-round((sum(blks_hit)::numeric / (sum(blks_hit) + sum(blks_read)::numeric))*100,2) as cache_read_hit_percentage
+round((sum(blks_hit)::numeric / nullif(sum(blks_hit) + sum(blks_read)::numeric, 0))*100,2) as cache_read_hit_percentage
 from pg_stat_database ;
 \qecho <br>
 \qecho cache read hit per Database 
@@ -2430,8 +2452,8 @@ round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent,
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent,
 parallel_workers_to_launch,
 parallel_workers_launched,
 generic_plan_calls,
@@ -2456,8 +2478,8 @@ round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent,
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent,
 parallel_workers_to_launch,
 parallel_workers_launched,
 generic_plan_calls,
@@ -2482,8 +2504,8 @@ round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent,
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent,
 parallel_workers_to_launch,
 parallel_workers_launched,
 generic_plan_calls,
@@ -2508,8 +2530,8 @@ round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent,
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent,
 parallel_workers_to_launch,
 parallel_workers_launched,
 generic_plan_calls,
@@ -2534,8 +2556,8 @@ round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent,
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent,
 shared_blks_read,
 parallel_workers_to_launch,
 parallel_workers_launched,
@@ -2565,14 +2587,14 @@ SELECT
     round((mean_exec_time::numeric / 1000), 2) AS avg_time_sec,
     round(stddev_exec_time::numeric, 2) AS standard_deviation_time_Msec,
     round((stddev_exec_time::numeric / 1000), 2) AS standard_deviation_time_sec,
-    round(ROWS::numeric / calls, 2) rows_per_exec,
-    round((100 * total_exec_time / sum(total_exec_time) OVER ())::numeric, 4) AS DB_time_percent,
+    round(ROWS::numeric / nullif(calls, 0), 2) rows_per_exec,
+    round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) AS DB_time_percent,
     local_blks_written,
     pg_size_pretty(local_blks_written * 8 * 1024) AS local_blks_written_size,
     local_blks_read,
     pg_size_pretty(local_blks_read * 8 * 1024) AS local_blks_read_size,
-    pg_size_pretty((local_blks_read * current_setting('block_size')::int) / calls) local_blks_read_per_call,
-    pg_size_pretty((local_blks_written * current_setting('block_size')::int) / calls) local_blks_written_per_call,
+    pg_size_pretty((local_blks_read * current_setting('block_size')::int) / nullif(calls, 0)) local_blks_read_per_call,
+    pg_size_pretty((local_blks_written * current_setting('block_size')::int) / nullif(calls, 0)) local_blks_written_per_call,
     (local_blks_read + local_blks_written) * 8 * 1024 AS total_local_blks_bytes,
     pg_size_pretty((local_blks_read + local_blks_written) * 8 * 1024) AS total_local_blks_size,
     parallel_workers_to_launch,
@@ -2607,16 +2629,16 @@ SELECT
     round((mean_exec_time::numeric / 1000), 2) AS avg_time_sec,
     round(stddev_exec_time::numeric, 2) AS standard_deviation_time_Msec,
     round((stddev_exec_time::numeric / 1000), 2) AS standard_deviation_time_sec,
-    round(ROWS::numeric / calls, 2) rows_per_exec,
-    round((100 * total_exec_time / sum(total_exec_time) OVER ())::numeric, 4) AS DB_time_percent,
+    round(ROWS::numeric / nullif(calls, 0), 2) rows_per_exec,
+    round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) AS DB_time_percent,
     temp_blks_written,
     pg_size_pretty(temp_blks_written * 8 * 1024) AS temp_blks_written_size,
     temp_blk_write_time,
     temp_blks_read,
     pg_size_pretty(temp_blks_read * 8 * 1024) AS temp_blks_read_size,
     temp_blk_read_time,
-    pg_size_pretty((temp_blks_read * current_setting('block_size')::int) / calls) temp_blks_read_per_call,
-    pg_size_pretty((temp_blks_written * current_setting('block_size')::int) / calls) temp_blks_written_per_call,
+    pg_size_pretty((temp_blks_read * current_setting('block_size')::int) / nullif(calls, 0)) temp_blks_read_per_call,
+    pg_size_pretty((temp_blks_written * current_setting('block_size')::int) / nullif(calls, 0)) temp_blks_written_per_call,
     (temp_blks_read + temp_blks_written) * 8 * 1024 AS total_temp_blks_bytes,
     pg_size_pretty((temp_blks_read + temp_blks_written) * 8 * 1024) AS total_temp_blks_size,
     parallel_workers_to_launch,
@@ -2645,7 +2667,7 @@ SELECT
     calls,
     round(total_exec_time::numeric, 2) AS total_time_Msec,
     round(mean_exec_time::numeric, 2) AS avg_time_Msec,
-    round(rows::numeric / calls, 2) rows_per_exec,
+    round(rows::numeric / nullif(calls, 0), 2) rows_per_exec,
     parallel_workers_to_launch,
     parallel_workers_launched,
     (parallel_workers_to_launch - parallel_workers_launched) AS workers_not_launched,
@@ -2672,7 +2694,7 @@ SELECT
     calls,
     round(total_exec_time::numeric, 2) AS total_time_Msec,
     round(mean_exec_time::numeric, 2) AS avg_time_Msec,
-    round(rows::numeric / calls, 2) rows_per_exec,
+    round(rows::numeric / nullif(calls, 0), 2) rows_per_exec,
     parallel_workers_to_launch,
     parallel_workers_launched,
     (parallel_workers_to_launch - parallel_workers_launched) AS workers_not_launched,
@@ -2699,7 +2721,7 @@ SELECT
     calls,
     round(total_exec_time::numeric, 2) AS total_time_Msec,
     round(mean_exec_time::numeric, 2) AS avg_time_Msec,
-    round(rows::numeric / calls, 2) rows_per_exec,
+    round(rows::numeric / nullif(calls, 0), 2) rows_per_exec,
     parallel_workers_to_launch,
     parallel_workers_launched,
     (parallel_workers_to_launch - parallel_workers_launched) AS workers_not_launched,
@@ -3792,10 +3814,7 @@ join information_schema.key_column_usage kcu
      on kcu.constraint_name = tco.constraint_name
      and kcu.constraint_schema = tco.constraint_schema
      and kcu.constraint_name = tco.constraint_name
-where tco.constraint_type in ('PRIMARY KEY', 'FOREIGN KEY')
-order by kcu.table_schema,
-         kcu.table_name,
-         kcu.ordinal_position)
+where tco.constraint_type in ('PRIMARY KEY', 'FOREIGN KEY'))
 select 
 c.table_schema,
 c.table_name,
@@ -5860,7 +5879,7 @@ ORDER BY replica_lag_in_msec NULLS FIRST;
 \qecho <details>
 SELECT *  FROM aurora_ccm_status();
 SELECT buffers_sent_last_minute * 8/60 AS warm_rate_kbps,
-100 * (1.0-buffers_sent_last_scan/buffers_found_last_scan) AS warm_percent 
+100 * (1.0-buffers_sent_last_scan/nullif(buffers_found_last_scan, 0)) AS warm_percent 
 FROM aurora_ccm_status ();
 \qecho </details>
 \qecho <center>[<a class="noLink" href="#top">Top</a>]</center><p>
@@ -5956,7 +5975,7 @@ select count(*) = 0 is_apg_plan_mgmt_not_enabled FROM pg_catalog.pg_extension wh
    \qecho <h3>apg_plan_mgmt.max_plans utilization :</h3> 
    \qecho <br>
    with plans_stored_count as (select count(*) as cnt from apg_plan_mgmt.dba_plans) 
-   select s.setting as max_plans, p.cnt as plans_stored_count, (p.cnt/s.setting::int)*100 as plans_stored_PCT_from_max_plans from pg_settings s, plans_stored_count p where s.name ='apg_plan_mgmt.max_plans';
+   select s.setting as max_plans, p.cnt as plans_stored_count, (p.cnt/nullif(s.setting::int, 0))*100 as plans_stored_PCT_from_max_plans from pg_settings s, plans_stored_count p where s.name ='apg_plan_mgmt.max_plans';
    \qecho <br>
    \qecho <h3>apg_plan_mgmt.plans table size :</h3> 
    \qecho <br>
@@ -6151,7 +6170,7 @@ select
 name, sum(allocated) as allocated_size_bytes,
  pg_size_pretty(sum(allocated)) as allocated_size,
  pg_size_pretty(sum(used)) as used_size,
- trunc(sum(used)/sum(allocated)*100,2) as used_pct,
+ trunc(sum(used) / nullif(sum(allocated), 0)*100,2) as used_pct,
   sum(instances) as instances_count
  from aurora_stat_memctx_usage()
  group by name
@@ -6161,7 +6180,7 @@ name, sum(allocated) as allocated_size_bytes,
 \qecho <br>
 select
 pid, sum(allocated) as allocated_size_bytes ,pg_size_pretty(sum(allocated)) as allocated_size , pg_size_pretty(sum(used)) as used_size,
-trunc(sum(used)/sum(allocated)*100,2) as used_pct
+trunc(sum(used) / nullif(sum(allocated), 0)*100,2) as used_pct
 from aurora_stat_memctx_usage()
 group by pid order by allocated_size_bytes desc
 limit 50;
@@ -6172,7 +6191,7 @@ limit 50;
 WITH memctx  AS
   (select
 pid, sum(allocated) as allocated_size_bytes ,pg_size_pretty(sum(allocated)) as allocated_size , pg_size_pretty(sum(used)) as used_size,
-trunc(sum(used)/sum(allocated)*100,2) as used_pct 
+trunc(sum(used) / nullif(sum(allocated), 0)*100,2) as used_pct 
 from aurora_stat_memctx_usage()
 group by pid order by allocated_size_bytes desc
 limit 50
@@ -6217,8 +6236,8 @@ round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from aurora_stat_statements()
 order by total_time_Msec desc limit 50;
 \qecho </details>
@@ -6233,8 +6252,8 @@ round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from aurora_stat_statements() 
 order by avg_time_Msec desc limit 50;
 \qecho </details>
@@ -6249,8 +6268,8 @@ round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from aurora_stat_statements() 
 order by percent desc limit 50;
 \qecho </details>
@@ -6265,8 +6284,8 @@ round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from aurora_stat_statements()
 order by calls desc limit 50;
 \qecho </details>
@@ -6282,8 +6301,8 @@ round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent,
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent,
 shared_blks_read,orcache_blks_hit,
 storage_blks_read
 from aurora_stat_statements() 
@@ -6316,8 +6335,8 @@ round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from aurora_stat_plans()
 where calls !=0
 order by total_time_Msec desc limit 50;
@@ -6335,8 +6354,8 @@ round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from aurora_stat_plans()
 where calls !=0
 order by avg_time_Msec desc limit 50;
@@ -6354,8 +6373,8 @@ round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from aurora_stat_plans()
 where calls !=0
 order by percent desc limit 50;
@@ -6373,8 +6392,8 @@ round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from aurora_stat_plans()
 where calls !=0
 order by calls desc limit 50;
@@ -6392,8 +6411,8 @@ round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent,
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent,
 shared_blks_read,orcache_blks_hit,
 storage_blks_read
 from aurora_stat_plans()
@@ -6427,8 +6446,8 @@ round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from aurora_stat_plans() where queryid in (select queryid 
 from aurora_stat_plans()
 where planid <> 0
@@ -6761,73 +6780,73 @@ select * from rds_aurora.limitless_stat_statements_info order by 3 desc;
 \qecho <br>
 \qecho <h3>Top 50 SQL order by total_time:</h3>
 \qecho <br>
-select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls/calls) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls, 
+select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls / nullif(calls, 0)) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls, 
 round(total_exec_time::numeric, 2) as total_time_Msec, 
 round((total_exec_time::numeric/1000), 2) as total_time_sec,
 round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from rds_aurora.limitless_stat_statements
 order by total_time_Msec desc limit 50;
 \qecho <br>
 \qecho <h3> Top 50 SQL order by avg_time:</h3>
 \qecho <br>
-select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls/calls) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls,
+select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls / nullif(calls, 0)) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls,
 round(total_exec_time::numeric, 2) as total_time_Msec, 
 round((total_exec_time::numeric/1000), 2) as total_time_sec,
 round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from rds_aurora.limitless_stat_statements 
 order by avg_time_Msec desc limit 50;
 \qecho <br>
 \qecho <h3>Top 50 SQL order by percent of total DB time percent:</h3>
 \qecho <br>
-select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls/calls) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls, 
+select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls / nullif(calls, 0)) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls, 
 round(total_exec_time::numeric, 2) as total_time_Msec, 
 round((total_exec_time::numeric/1000), 2) as total_time_sec,
 round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from rds_aurora.limitless_stat_statements 
 order by percent desc limit 50;
 
 \qecho <br>
 \qecho <h3>Top 50 SQL order by number of execution (CALLs):</h3>
 \qecho <br>
-select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls/calls) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls,
+select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls / nullif(calls, 0)) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls,
 round(total_exec_time::numeric, 2) as total_time_Msec, 
 round((total_exec_time::numeric/1000), 2) as total_time_sec,
 round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from rds_aurora.limitless_stat_statements
 order by calls desc limit 50;
 
 \qecho <br>
 \qecho <h3>Top 50 SQL order by shared blocks read (physical reads) from Aurora storage:</h3>
 \qecho <br>
-select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls/calls) * 100 ,2) as "sso_calls_%",distributedqueryid, substring(query,1,60) as query , calls,
+select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls / nullif(calls, 0)) * 100 ,2) as "sso_calls_%",distributedqueryid, substring(query,1,60) as query , calls,
 round(total_exec_time::numeric, 2) as total_time_Msec, 
 round((total_exec_time::numeric/1000), 2) as total_time_sec,
 round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent,
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent,
 shared_blks_read
 storage_blks_read
 from rds_aurora.limitless_stat_statements
@@ -6858,15 +6877,15 @@ select count(*) > 0 is_pg_stat_statements_enabled FROM pg_catalog.pg_extension w
 \qecho <br>
 \qecho <h3>Top 50 multi shard queries (MSQ) order by total_time:</h3>
 \qecho <br>
-select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls/calls) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls, 
+select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls / nullif(calls, 0)) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls, 
 round(total_exec_time::numeric, 2) as total_time_Msec, 
 round((total_exec_time::numeric/1000), 2) as total_time_sec,
 round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from rds_aurora.limitless_stat_statements
 where sso_calls = 0 
 and subcluster_type ='router'
@@ -6874,15 +6893,15 @@ order by total_time_Msec desc limit 50;
 \qecho <br>
 \qecho <h3>Top 50 multi shard queries (MSQ) order by avg_time:</h3>
 \qecho <br>
-select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls/calls) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls,
+select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls / nullif(calls, 0)) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls,
 round(total_exec_time::numeric, 2) as total_time_Msec, 
 round((total_exec_time::numeric/1000), 2) as total_time_sec,
 round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from rds_aurora.limitless_stat_statements 
 where sso_calls = 0 
 and subcluster_type ='router'
@@ -6893,15 +6912,15 @@ order by avg_time_Msec desc limit 50;
 \qecho <br>
 
 
-select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls/calls) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls, 
+select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls / nullif(calls, 0)) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls, 
 round(total_exec_time::numeric, 2) as total_time_Msec, 
 round((total_exec_time::numeric/1000), 2) as total_time_sec,
 round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from rds_aurora.limitless_stat_statements 
 where sso_calls = 0 
 and subcluster_type ='router'
@@ -6909,15 +6928,15 @@ order by percent desc limit 50;
 \qecho <br>
 \qecho <h3>Top 50 multi shard queries (MSQ) order by number of execution (CALLs):</h3>
 \qecho <br>
-select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls/calls) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls,
+select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls / nullif(calls, 0)) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls,
 round(total_exec_time::numeric, 2) as total_time_Msec, 
 round((total_exec_time::numeric/1000), 2) as total_time_sec,
 round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from rds_aurora.limitless_stat_statements
 where sso_calls = 0 
 and subcluster_type ='router'
@@ -6925,15 +6944,15 @@ order by calls desc limit 50;
 \qecho <br>
 \qecho <h3>Top 50 multi shard queries (MSQ) order by shared blocks read (physical reads) from Aurora storage:</h3>
 \qecho <br>
-select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls/calls) * 100 ,2) as "sso_calls_%",distributedqueryid, substring(query,1,60) as query , calls,
+select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls / nullif(calls, 0)) * 100 ,2) as "sso_calls_%",distributedqueryid, substring(query,1,60) as query , calls,
 round(total_exec_time::numeric, 2) as total_time_Msec, 
 round((total_exec_time::numeric/1000), 2) as total_time_sec,
 round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent,
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent,
 shared_blks_read
 storage_blks_read
 from rds_aurora.limitless_stat_statements
@@ -6966,19 +6985,19 @@ select count(*) > 0 is_pg_stat_statements_enabled FROM pg_catalog.pg_extension w
 \qecho <br>
 \qecho <h3>Single Shard Optimized (SSO) Percentage:</h3>
 \qecho <br>
-select sum(calls) as count_calls, sum (sso_calls) as count_sso_calls ,trunc ((sum (sso_calls) /sum(calls) ) * 100 ,2)as "sso_calls_%" from rds_aurora.limitless_stat_statements where subcluster_type ='router' ;
+select sum(calls) as count_calls, sum (sso_calls) as count_sso_calls ,trunc ((sum(sso_calls) / nullif(sum(calls), 0)) * 100 ,2)as "sso_calls_%" from rds_aurora.limitless_stat_statements where subcluster_type ='router' ;
 \qecho <br>
 \qecho <h3>Top 50 Single Shard Optimized (SSO) order by total_time:</h3>
 \qecho <br>
-select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls/calls) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls, 
+select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls / nullif(calls, 0)) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls, 
 round(total_exec_time::numeric, 2) as total_time_Msec, 
 round((total_exec_time::numeric/1000), 2) as total_time_sec,
 round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from rds_aurora.limitless_stat_statements
 where sso_calls > 0 
 and subcluster_type ='router'
@@ -6987,15 +7006,15 @@ order by total_time_Msec desc limit 50;
 \qecho <br>
 \qecho <h3>Top 50 Single Shard Optimized (SSO) order by avg_time:</h3>
 \qecho <br>
-select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls/calls) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls,
+select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls / nullif(calls, 0)) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls,
 round(total_exec_time::numeric, 2) as total_time_Msec, 
 round((total_exec_time::numeric/1000), 2) as total_time_sec,
 round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from rds_aurora.limitless_stat_statements 
 where sso_calls > 0 
 and subcluster_type ='router'
@@ -7007,15 +7026,15 @@ order by avg_time_Msec desc limit 50;
 \qecho <br>
 
 
-select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls/calls) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls, 
+select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls / nullif(calls, 0)) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls, 
 round(total_exec_time::numeric, 2) as total_time_Msec, 
 round((total_exec_time::numeric/1000), 2) as total_time_sec,
 round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from rds_aurora.limitless_stat_statements 
 where sso_calls > 0 
 and subcluster_type ='router'
@@ -7024,15 +7043,15 @@ order by percent desc limit 50;
 \qecho <br>
 \qecho <h3>Top 50 Single Shard Optimized (SSO) order by number of execution (CALLs):</h3>
 \qecho <br>
-select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls/calls) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls,
+select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls / nullif(calls, 0)) * 100 ,2) as "sso_calls_%",distributedqueryid,substring(query,1,60) as query , calls,
 round(total_exec_time::numeric, 2) as total_time_Msec, 
 round((total_exec_time::numeric/1000), 2) as total_time_sec,
 round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
 from rds_aurora.limitless_stat_statements
 where sso_calls > 0 
 and subcluster_type ='router'
@@ -7041,15 +7060,15 @@ order by calls desc limit 50;
 \qecho <br>
 \qecho <h3> Top 50 Single Shard Optimized (SSO) order by shared blocks read (physical reads) from Aurora storage: </h3>
 \qecho <br>
-select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls/calls) * 100 ,2) as "sso_calls_%",distributedqueryid, substring(query,1,60) as query , calls,
+select subcluster_id,subcluster_type,queryid,sso_calls,trunc ((sso_calls / nullif(calls, 0)) * 100 ,2) as "sso_calls_%",distributedqueryid, substring(query,1,60) as query , calls,
 round(total_exec_time::numeric, 2) as total_time_Msec, 
 round((total_exec_time::numeric/1000), 2) as total_time_sec,
 round(mean_exec_time::numeric,2) as avg_time_Msec,
 round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
-round(rows::numeric/calls,2) rows_per_exec,
-round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 4) as percent,
+round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent,
 shared_blks_read
 storage_blks_read
 from rds_aurora.limitless_stat_statements

@@ -14,6 +14,7 @@ one proves. For instructions on *running* the suite see
 | `test_lint[check_toc.py]`           | Static  | No  | Every nav-table `href="#X"` resolves to an `<a name="X">` anchor. |
 | `test_lint[check_if_endif.py]`      | Static  | No  | Every `\if` is properly closed, including nested Aurora gates. |
 | `test_lint[check_dialect.py]`       | Static  | No  | Every embedded SQL query parses as valid PostgreSQL. |
+| `test_lint[check_div_by_zero.py]`   | Static  | No  | No division has a live statistics counter as an unguarded divisor. |
 | `test_runtime[empty-seed]`          | Runtime | Yes | The script runs read-only end-to-end, mutates nothing, and produces a structurally valid HTML report. |
 | `test_runtime[populated-pgss-aurora]` | Runtime | Yes | All CI-seedable observations fire correctly and the Aurora-specific branch executes. |
 
@@ -67,6 +68,20 @@ defeats static parsing.
 **Proves**: every query is syntactically valid PostgreSQL — catches
 dialect bugs (column renames, deprecated syntax) that only surface
 against specific PG majors.
+
+### `test_lint[check_div_by_zero.py]` — arithmetic on live counters
+
+Walks every division in the script and classifies its divisor. A divisor
+that is a column, an aggregate over one, or a sum of those is a bug
+unless it is wrapped in `nullif`/`greatest`, tested against zero
+elsewhere in the same statement, or named in the checker's
+`ALWAYS_NONZERO` list with a reason.
+
+**Proves**: a report run while `pg_stat_statements` is being reset — or
+against an idle cluster, or a vacuum of an empty table — does not abort
+whole sections with `ERROR: division by zero`. This is upstream issue
+[#10](https://github.com/awslabs/pg-collector/issues/10); the checker
+flags 96 divisions on the pre-fix script and none on the current one.
 
 ## Layer 2 — Runtime harness (requires PG)
 

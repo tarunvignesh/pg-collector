@@ -51,6 +51,13 @@ we expected. All three must pass for a change to merge.
   are replaced with placeholders before parsing. Catches syntax bugs that
   only show up against specific PG majors.
 
+- `check_div_by_zero.py` — every division's divisor is classified, and a
+  live statistics counter in a denominator fails the build unless it is
+  guarded. A parse check cannot catch this: `rows / calls` is valid SQL
+  that aborts a section the moment `calls` is 0. Written after upstream
+  issue #10, where a concurrent `pg_stat_statements_reset()` blanked
+  several sections of a customer's report.
+
 ### Runtime harness (`tests/run.sh`)
 
 `run.sh` composes fixtures, executes the script, and runs HTML assertions.

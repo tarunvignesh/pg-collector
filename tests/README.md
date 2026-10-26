@@ -41,6 +41,7 @@ python tests/lint/check_safety.py    pg_collector.sql
 python tests/lint/check_toc.py       pg_collector.sql
 python tests/lint/check_if_endif.py  pg_collector.sql
 python tests/lint/check_dialect.py   pg_collector.sql
+python tests/lint/check_div_by_zero.py pg_collector.sql
 ```
 
 ### Runtime tests — BYOD (bring your own database)

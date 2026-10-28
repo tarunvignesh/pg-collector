@@ -30,17 +30,21 @@
     box-shadow:0 6px 24px rgba(0,0,0,.5); white-space:nowrap; letter-spacing:-.01em;
   }
 </style>
-<iframe id="f" src="enhance.html?report=../sample_reports/pg_collector_pg19_sample-2026-10-22.html"></iframe>
+<iframe id="f"></iframe>
 <div id="cap"></div>
 <script>
-const step = parseInt(new URLSearchParams(location.search).get('step') || '0', 10);
-const theme = new URLSearchParams(location.search).get('theme') || 'dark';
+const q = new URLSearchParams(location.search);
+const step = parseInt(q.get('step') || '0', 10);
+const theme = q.get('theme') || 'dark';
+const report = q.get('r') || '../sample_reports/pg_collector_pg19_sample-2026-10-22.html';
+const which = q.get('story') || 'traffic';
 const f = document.getElementById('f');
+f.src = 'enhance.html?report=' + report;
 
 // Each entry: what to do to reach this frame, and the caption shown on it.
 // Actions are cumulative -- frame N replays actions 1..N, so every frame is
 // reproducible from a cold load and the capture needs no timing luck.
-const STORY = [
+const TRAFFIC = [
   {cap: 'Drop a pg_collector report in — the traffic light is the verdict'},
   {cap: 'Red lamp lit: 3 critical findings. The lamps are the filter.'},
   {act: d => d.querySelector('.chip[data-sev="crit"]').click(),
@@ -66,6 +70,38 @@ const STORY = [
                d.querySelector('.chip[data-sev="all"]').click(); },
    cap: 'Nothing is uploaded — it all runs in the browser'},
 ];
+
+// Second storyboard: what a checked-in sample report looks like once it is
+// open. Written to work against any major's report, because the last frames
+// are captured against PG14/15/16 to show the viewer is version-agnostic.
+function firstSortable(d) {
+  for (const sec of d.querySelectorAll('#sections .section')) {
+    const th = sec.querySelector('th.numeric');
+    if (th) return {sec, th};
+  }
+  return null;
+}
+
+const SAMPLE = [
+  {cap: 'sample_reports/ ships a full report for PG 14, 15, 16 and 19'},
+  {act: d => { const t = firstSortable(d); if (!t) return;
+               t.sec.open = true;
+               const y = t.sec.getBoundingClientRect().top + d.defaultView.scrollY;
+               d.defaultView.scrollTo(0, y - 90); },
+   cap: 'Every section expands in place — no page reload, no scroll hunting'},
+  {act: d => { const t = firstSortable(d); if (t) { t.th.click(); t.th.click(); } },
+   cap: 'Numeric columns right-align and sort — biggest first'},
+  {act: d => { const sec = d.getElementById('sec-DB_parameters');
+               if (!sec) return;
+               sec.open = true;
+               const y = sec.getBoundingClientRect().top + d.defaultView.scrollY;
+               d.defaultView.scrollTo(0, y - 90); },
+   cap: 'DB parameters gets a grouped, pgtune-style view'},
+  {act: d => d.defaultView.scrollTo(0, 0),
+   cap: 'The same viewer renders every major\'s report'},
+];
+
+const STORY = which === 'sample' ? SAMPLE : TRAFFIC;
 
 let tries = 0;
 function go() {

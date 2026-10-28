@@ -266,12 +266,18 @@ for the viewer (yet). If you add one, drop it in
 
 #### Regenerating the README GIF
 
-`img/enhance_traffic_light.gif` in the root README is driven by
-`tools/gif-capture.html`, a maintainer-only harness that loads the viewer
-in an iframe and replays a fixed storyboard. Frame N replays actions
-1..N from a cold load, so frames never depend on capture timing. The
-full chromium + ffmpeg recipe is in a comment at the top of that file.
-Edit the `STORY` array to change what the GIF demonstrates.
+Both GIFs in the root README -- `img/enhance_traffic_light.gif` and
+`img/sample_report_viewer.gif` -- are driven by `tools/gif-capture.html`,
+a maintainer-only harness that loads the viewer in an iframe and replays
+a fixed storyboard. Frame N replays actions 1..N from a cold load, so
+frames never depend on capture timing. The full chromium + ffmpeg recipe
+is in a comment at the top of that file.
+
+It takes three query parameters: `step` (which frame), `story`
+(`traffic` or `sample`), and `r` (which report to load). The sample
+story's last frames are captured against the PG16, PG15 and PG14 reports
+in turn, which is how one GIF shows the viewer handling every major.
+Edit the `TRAFFIC` or `SAMPLE` array to change what is demonstrated.
 
 ### What this viewer is *not*
 

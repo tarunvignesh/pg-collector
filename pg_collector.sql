@@ -2190,13 +2190,13 @@ select * from pg_stat_all_tables order by schemaname;
 \qecho <h3>pg_stat_all_tables order by autovacuum_count : </h3>
 \qecho <br>
 \qecho <details>
-select relname,schemaname,last_vacuum,last_autovacuum,last_analyze,last_autoanalyze,vacuum_count,autovacuum_count,analyze_count,autoanalyze_count,trunc(extract(epoch from (now() - coalesce(last_vacuum, last_autovacuum)))/3600,2) as hours_since_last_vacuum,trunc(extract(epoch from (now() - coalesce(last_vacuum, last_autovacuum)))/86400,2) as days_since_last_vacuum from pg_stat_all_tables order by autovacuum_count desc;
+select relname,schemaname,last_vacuum,last_autovacuum,last_analyze,last_autoanalyze,vacuum_count,autovacuum_count,analyze_count,autoanalyze_count,trunc((extract(epoch from (now() - coalesce(last_vacuum, last_autovacuum)))/3600)::numeric,2) as hours_since_last_vacuum,trunc((extract(epoch from (now() - coalesce(last_vacuum, last_autovacuum)))/86400)::numeric,2) as days_since_last_vacuum from pg_stat_all_tables order by autovacuum_count desc;
 \qecho </details>
 \qecho <br>
 \qecho <h3>pg_stat_all_tables order by autoanalyze_count: </h3>
 \qecho <br>
 \qecho <details>
-select relname,schemaname,last_vacuum,last_autovacuum,last_analyze,last_autoanalyze,vacuum_count,autovacuum_count,analyze_count,autoanalyze_count,trunc(extract(epoch from (now() - coalesce(last_vacuum, last_autovacuum)))/3600,2) as hours_since_last_vacuum,trunc(extract(epoch from (now() - coalesce(last_vacuum, last_autovacuum)))/86400,2) as days_since_last_vacuum from pg_stat_all_tables order by autoanalyze_count desc;
+select relname,schemaname,last_vacuum,last_autovacuum,last_analyze,last_autoanalyze,vacuum_count,autovacuum_count,analyze_count,autoanalyze_count,trunc((extract(epoch from (now() - coalesce(last_vacuum, last_autovacuum)))/3600)::numeric,2) as hours_since_last_vacuum,trunc((extract(epoch from (now() - coalesce(last_vacuum, last_autovacuum)))/86400)::numeric,2) as days_since_last_vacuum from pg_stat_all_tables order by autoanalyze_count desc;
 \qecho </details>
 \qecho <br>
 \qecho <h3>tables without auto analyze : </h3>

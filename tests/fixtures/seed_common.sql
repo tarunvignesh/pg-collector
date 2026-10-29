@@ -73,36 +73,70 @@ ANALYZE pgc_fixture.events;
 RESET ROLE;
 
 -- ---------- Read-only grants for pgc_runner ----------
+-- Granting every read privilege means the only remaining source of
+-- `permission denied` is an attempt to *write* -- which is exactly what the
+-- runner wants to detect. Getting the version split wrong therefore does not
+-- just weaken the fixture, it manufactures false write accusations.
+--
+-- pg_read_all_stats, pg_read_all_settings, pg_read_server_files and pg_monitor
+-- are all PG10+. Only pg_read_all_data is PG14+, so only that one is gated.
+-- Gating the whole block on PG14 left a PG13 runner with none of them, and the
+-- resulting `must be superuser or a member of pg_read_all_settings to examine
+-- "data_directory"` was reported as an attempted write.
+GRANT pg_read_all_stats TO pgc_runner;
+GRANT pg_read_all_settings TO pgc_runner;
+GRANT pg_read_server_files TO pgc_runner;
+GRANT pg_monitor TO pgc_runner;
+
+-- These default to superuser-only EXECUTE in recent PG; they are read-only and
+-- PG Collector calls them directly. Not grantable on every major, hence the
+-- swallowed exception.
+DO $$
+BEGIN
+    EXECUTE 'GRANT EXECUTE ON FUNCTION pg_hba_file_rules() TO pgc_runner';
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+-- On PG13 pg_hba_file_rules is a view whose SELECT privilege is separate from
+-- EXECUTE on the backing function; granting only the function still leaves
+-- `permission denied for view pg_hba_file_rules`.
+DO $$
+BEGIN
+    EXECUTE 'GRANT SELECT ON pg_hba_file_rules TO pgc_runner';
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+DO $$
+BEGIN
+    EXECUTE 'GRANT EXECUTE ON FUNCTION pg_config() TO pgc_runner';
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+DO $$
+BEGIN
+    EXECUTE 'GRANT EXECUTE ON FUNCTION pg_ls_tmpdir() TO pgc_runner';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION pg_ls_tmpdir(oid) TO pgc_runner';
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
 SELECT current_setting('server_version_num')::int >= 140000 AS has_read_all_data \gset
 
 \if :has_read_all_data
-    -- All read-only predefined roles we can grant. Granting every read
-    -- privilege means the only remaining source of `permission denied` is
-    -- an attempt to *write* — which is exactly what we want to detect.
     GRANT pg_read_all_data TO pgc_runner;
-    GRANT pg_read_all_stats TO pgc_runner;
-    GRANT pg_read_all_settings TO pgc_runner;
-    GRANT pg_read_server_files TO pgc_runner;
-    GRANT pg_monitor TO pgc_runner;
-    -- These functions default to superuser-only EXECUTE in recent PG; they
-    -- are read-only and PG Collector calls them directly.
-    DO $$
-    BEGIN
-        EXECUTE 'GRANT EXECUTE ON FUNCTION pg_hba_file_rules() TO pgc_runner';
-    EXCEPTION WHEN OTHERS THEN NULL;
-    END $$;
-    DO $$
-    BEGIN
-        EXECUTE 'GRANT EXECUTE ON FUNCTION pg_config() TO pgc_runner';
-    EXCEPTION WHEN OTHERS THEN NULL;
-    END $$;
 \else
+    -- No blanket read role before PG14; grant object-by-object instead.
     GRANT SELECT ON ALL TABLES IN SCHEMA pgc_fixture TO pgc_runner;
     GRANT SELECT ON ALL TABLES IN SCHEMA public TO pgc_runner;
+    -- Sequences are not tables. pg_sequences.last_value reads NULL for a
+    -- sequence the caller cannot SELECT, which silently defeats the
+    -- "sequence near max" health check rather than erroring.
+    GRANT SELECT ON ALL SEQUENCES IN SCHEMA pgc_fixture TO pgc_runner;
+    GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO pgc_runner;
     ALTER DEFAULT PRIVILEGES FOR ROLE pgc_admin IN SCHEMA pgc_fixture
         GRANT SELECT ON TABLES TO pgc_runner;
     ALTER DEFAULT PRIVILEGES FOR ROLE pgc_admin IN SCHEMA public
         GRANT SELECT ON TABLES TO pgc_runner;
+    ALTER DEFAULT PRIVILEGES FOR ROLE pgc_admin IN SCHEMA pgc_fixture
+        GRANT SELECT ON SEQUENCES TO pgc_runner;
+    ALTER DEFAULT PRIVILEGES FOR ROLE pgc_admin IN SCHEMA public
+        GRANT SELECT ON SEQUENCES TO pgc_runner;
 \endif
 
 -- pg_stat_statements requires explicit grant on its functions for non-superusers
@@ -113,7 +147,7 @@ BEGIN
         EXECUTE 'GRANT pg_read_all_stats TO pgc_runner';
     END IF;
 EXCEPTION WHEN OTHERS THEN
-    -- pg_read_all_stats doesn't exist on PG<14; ignore.
+    -- Already granted above on every supported major; ignore a re-grant error.
     NULL;
 END
 $$;

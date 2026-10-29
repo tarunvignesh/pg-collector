@@ -74,6 +74,20 @@ All notable changes to pg collector will be documented in this file.
     cache scan, and the Aurora Limitless single-shard call ratio.
     tests/lint/check_div_by_zero.py now fails the build on any new occurrence.
 
+13- Version-gated the Collation / glibc index risk section so it works on
+    PostgreSQL 13 and 14 instead of erroring. pg_database.datcollversion and
+    pg_database_collation_actual_version() are PG15+, but
+    pg_collation.collversion and pg_collation_actual_version() go back to PG10,
+    so named collations - where most text indexes get their ordering - are now
+    checked in full on older servers. The database-default collation cannot be
+    version-checked before PG15; rather than skip it, the pre-PG15 path reports
+    the blast radius instead: the operating system's current libc collation
+    version, and how many indexes sort by the database default, broken out by
+    PRIMARY KEY and UNIQUE with a total size. This is the RHEL 7 (glibc 2.17)
+    to RHEL 8 (glibc 2.28) case, which is exactly the population of databases
+    still running PG13. Previously the section raised five "column does not
+    exist" errors on PG13 and the collation health check never fired.
+
 12- Fixed issue #7 - the autovacuum eligibility queries now consider
     autovacuum_vacuum_insert_threshold and autovacuum_vacuum_insert_scale_factor
     (PostgreSQL 13 and later), including per-table reloption overrides. Tables

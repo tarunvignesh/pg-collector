@@ -50,6 +50,12 @@ ALTER SYSTEM SET autovacuum = 'off';
 -- ---------- 5. Sequences with <10% remaining ----------
 CREATE SEQUENCE IF NOT EXISTS pgc_fixture.near_wrap MAXVALUE 100;
 SELECT setval('pgc_fixture.near_wrap', 95);
+-- Grant here, not in seed_common.sql: that file runs first, and GRANT ON ALL
+-- SEQUENCES only covers sequences that already exist. Before PG14 there is no
+-- pg_read_all_data to fall back on, and pg_sequences.last_value reads NULL --
+-- not an error -- for a sequence the caller cannot SELECT, so without this the
+-- check silently reports "OK" on PG13 instead of firing.
+GRANT SELECT ON SEQUENCE pgc_fixture.near_wrap TO pgc_runner;
 
 -- ---------- 6. Orphaned prepared transactions ----------
 -- The check uses `interval '5 minute'`; we can't wait that long in CI.

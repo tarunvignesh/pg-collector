@@ -1398,6 +1398,14 @@ FROM pg_settings WHERE pending_restart = true \gset
 -- directory - classically a RHEL 7 (glibc 2.17) to RHEL 8+ (glibc 2.28)
 -- in-place upgrade. Text index ordering is then wrong: lookups miss rows
 -- and UNIQUE indexes can admit duplicates.
+-- pg_database.datcollversion and pg_database_collation_actual_version() arrived
+-- in PG15, so the database-default collation cannot be version-checked before
+-- that. pg_collation.collversion and pg_collation_actual_version() go back to
+-- PG10, so named collations -- which is where most text indexes get their
+-- ordering -- are still fully checked on PG13 and PG14.
+select current_setting('server_version_num')::int >= 150000 as v_dbcollversion \gset
+
+\if :v_dbcollversion
 select count(*) > 0 obsrv_collation_mismatch from (
     select 1 from pg_collation
      where collversion is not null
@@ -1407,6 +1415,13 @@ select count(*) > 0 obsrv_collation_mismatch from (
      where datname = current_database()
        and datcollversion is distinct from pg_database_collation_actual_version(oid)
 ) as t \gset
+\else
+select count(*) > 0 obsrv_collation_mismatch from (
+    select 1 from pg_collation
+     where collversion is not null
+       and collversion is distinct from pg_collation_actual_version(oid)
+) as t \gset
+\endif
 
 \if :obsrv_collation_mismatch
     \qecho <br>
@@ -5526,7 +5541,15 @@ ORDER BY server, local_user;
 \qecho <h4>The classic trigger is an in-place OS upgrade of a running data directory - RHEL 7 (glibc 2.17) to RHEL 8 or later (glibc 2.28), where a large number of locales changed ordering. A dump and restore, or pg_upgrade followed by a REINDEX, is not affected because the indexes are rebuilt.</h4>
 \qecho <br>
 
+-- pg_database.datcollversion and pg_database_collation_actual_version() arrived
+-- in PG15, so the database-default collation cannot be version-checked before
+-- that. pg_collation.collversion and pg_collation_actual_version() go back to
+-- PG10, so named collations -- which is where most text indexes get their
+-- ordering -- are still fully checked on PG13 and PG14.
+select current_setting('server_version_num')::int >= 150000 as v_dbcollversion \gset
+
 \qecho <h3>Database collation state:</h3>
+\if :v_dbcollversion
 SELECT d.datname                                              AS database,
        CASE d.datlocprovider WHEN 'c' THEN 'libc'
                              WHEN 'i' THEN 'icu'
@@ -5544,6 +5567,15 @@ SELECT d.datname                                              AS database,
        END                                                    AS status
 FROM pg_database d
 WHERE d.datname = current_database();
+\else
+SELECT d.datname     AS database,
+       d.datcollate  AS lc_collate,
+       d.datctype    AS lc_ctype,
+       'not tracked before PostgreSQL 15' AS recorded_version
+FROM pg_database d
+WHERE d.datname = current_database();
+\qecho <h4>Note: this server predates PostgreSQL 15, which is where pg_database.datcollversion was added, so the database default collation carries no recorded version to compare against. Named collations below are still checked in full. If this database was moved across an OS upgrade, treat indexes built on the database default collation as suspect regardless of what this section reports, and rebuild them.</h4>
+\endif
 
 \qecho <br>
 \qecho <h3>Collations whose version changed:</h3>
@@ -5554,6 +5586,7 @@ SELECT n.nspname                                            AS schema,
        CASE c.collprovider WHEN 'c' THEN 'libc'
                            WHEN 'i' THEN 'icu'
                            WHEN 'b' THEN 'builtin'
+                           WHEN 'd' THEN 'database default'
                            ELSE c.collprovider::text END    AS provider,
        c.collversion                                        AS recorded_version,
        pg_collation_actual_version(c.oid)                   AS os_version,
@@ -5572,6 +5605,7 @@ ORDER BY 6, 1, 2;
 
 \qecho <br>
 \qecho <h3>Affected index summary:</h3>
+\if :v_dbcollversion
 WITH defcoll AS (
     SELECT oid FROM pg_collation
      WHERE collname = 'default' AND collnamespace = 'pg_catalog'::regnamespace
@@ -5601,11 +5635,57 @@ SELECT count(*)                                             AS affected_indexes,
        count(*) FILTER (WHERE indisunique AND NOT indisprimary) AS unique_indexes,
        pg_size_pretty(coalesce(sum(pg_relation_size(indexrelid)), 0)) AS total_index_size
 FROM affected;
+\else
+WITH bad_coll AS (
+    SELECT c.oid AS colloid
+      FROM pg_collation c
+     WHERE c.collversion IS NOT NULL
+       AND c.collversion IS DISTINCT FROM pg_collation_actual_version(c.oid)
+),
+affected AS (
+    SELECT DISTINCT i.indexrelid, i.indisunique, i.indisprimary
+      FROM pg_index i
+      CROSS JOIN LATERAL unnest(i.indcollation::oid[]) AS u(colloid)
+     WHERE u.colloid <> 0
+       AND u.colloid IN (SELECT colloid FROM bad_coll)
+)
+SELECT count(*)                                             AS affected_indexes,
+       count(*) FILTER (WHERE indisprimary)                 AS primary_keys,
+       count(*) FILTER (WHERE indisunique AND NOT indisprimary) AS unique_indexes,
+       pg_size_pretty(coalesce(sum(pg_relation_size(indexrelid)), 0)) AS total_index_size
+FROM affected;
+
+\qecho <br>
+\qecho <h3>Indexes on the database default collation - blast radius, not a verdict:</h3>
+\qecho <h4>Note: this server cannot tell you whether the database default collation changed, because pg_database.datcollversion only exists from PostgreSQL 15. What it can tell you is how much is riding on it. Every index below sorts by the default collation, so if this data directory was carried across an OS upgrade - the classic case being RHEL 7 (glibc 2.17) to RHEL 8 or later (glibc 2.28), where ordering changed for most locales - then all of them are suspect and the PRIMARY KEY and UNIQUE entries may already contain duplicates.</h4>
+\qecho <h4>Compare the recorded version of a named collation above, or the version this database was created under, against the operating system version shown here. If you cannot establish that they match, REINDEX before trusting any text index.</h4>
+\qecho <br>
+WITH defcoll AS (
+    SELECT oid FROM pg_collation
+     WHERE collname = 'default' AND collnamespace = 'pg_catalog'::regnamespace
+),
+on_default AS (
+    SELECT DISTINCT i.indexrelid, i.indisunique, i.indisprimary
+      FROM pg_index i
+      CROSS JOIN LATERAL unnest(i.indcollation::oid[]) AS u(colloid)
+     WHERE u.colloid = (SELECT oid FROM defcoll)
+)
+SELECT (SELECT max(pg_collation_actual_version(c2.oid))
+          FROM pg_collation c2
+         WHERE c2.collprovider = 'c'
+           AND pg_collation_actual_version(c2.oid) IS NOT NULL)  AS os_libc_collation_version,
+       count(*)                                                  AS indexes_on_default_collation,
+       count(*) FILTER (WHERE indisprimary)                      AS primary_keys,
+       count(*) FILTER (WHERE indisunique AND NOT indisprimary)  AS unique_indexes,
+       pg_size_pretty(coalesce(sum(pg_relation_size(indexrelid)), 0)) AS total_index_size
+FROM on_default;
+\endif
 
 \qecho <br>
 \qecho <h3>Indexes requiring REINDEX (largest 200):</h3>
 \qecho <h4>Note: PRIMARY KEY and UNIQUE entries are the most urgent - a broken ordering means the uniqueness guarantee was not enforced while the mismatch existed, so duplicates may already be present.</h4>
 \qecho <br>
+\if :v_dbcollversion
 WITH defcoll AS (
     SELECT oid FROM pg_collation
      WHERE collname = 'default' AND collnamespace = 'pg_catalog'::regnamespace
@@ -5650,11 +5730,45 @@ WHERE u.colloid <> 0
   AND (cs.colloid IS NOT NULL OR db.recorded_version IS NOT NULL)
 ORDER BY size_bytes DESC
 LIMIT 200;
+\else
+WITH coll_state AS (
+    SELECT c.oid AS colloid,
+           n.nspname || '.' || c.collname AS collation_name,
+           c.collversion AS recorded_version,
+           pg_collation_actual_version(c.oid) AS os_version
+      FROM pg_collation c
+      JOIN pg_namespace n ON n.oid = c.collnamespace
+     WHERE c.collversion IS NOT NULL
+       AND c.collversion IS DISTINCT FROM pg_collation_actual_version(c.oid)
+)
+SELECT DISTINCT
+       n.nspname                                        AS schema,
+       tc.relname                                       AS table_name,
+       ic.relname                                       AS index_name,
+       CASE WHEN i.indisprimary THEN 'PRIMARY KEY'
+            WHEN i.indisunique  THEN 'UNIQUE'
+            ELSE 'index' END                            AS index_kind,
+       cs.collation_name                                AS affected_collation,
+       cs.recorded_version                              AS recorded_version,
+       cs.os_version                                    AS os_version,
+       pg_size_pretty(pg_relation_size(i.indexrelid))   AS index_size,
+       pg_relation_size(i.indexrelid)                   AS size_bytes
+FROM pg_index i
+JOIN pg_class ic    ON ic.oid = i.indexrelid
+JOIN pg_class tc    ON tc.oid = i.indrelid
+JOIN pg_namespace n ON n.oid  = tc.relnamespace
+CROSS JOIN LATERAL unnest(i.indcollation::oid[]) AS u(colloid)
+JOIN coll_state cs  ON cs.colloid = u.colloid
+WHERE u.colloid <> 0
+ORDER BY size_bytes DESC
+LIMIT 200;
+\endif
 
 \qecho <br>
 \qecho <h3>Partitioned tables with a text partition key:</h3>
 \qecho <h4>Note: RANGE and LIST partitioning on a collatable column uses collation order to route rows. If that order changed, existing rows may now sit in the wrong partition and new rows may route differently from old ones.</h4>
 \qecho <br>
+\if :v_dbcollversion
 SELECT n.nspname                        AS schema,
        c.relname                        AS partitioned_table,
        pg_get_partkeydef(c.oid)         AS partition_key,
@@ -5675,6 +5789,22 @@ WHERE u.colloid <> 0
                             AND d.datcollversion IS DISTINCT FROM pg_database_collation_actual_version(d.oid)) ) )
 GROUP BY 1, 2, 3, c.oid
 ORDER BY 1, 2;
+\else
+SELECT n.nspname                        AS schema,
+       c.relname                        AS partitioned_table,
+       pg_get_partkeydef(c.oid)         AS partition_key,
+       (SELECT count(*) FROM pg_inherits inh WHERE inh.inhparent = c.oid) AS partitions
+FROM pg_class c
+JOIN pg_namespace n          ON n.oid = c.relnamespace
+JOIN pg_partitioned_table pt ON pt.partrelid = c.oid
+CROSS JOIN LATERAL unnest(pt.partcollation::oid[]) AS u(colloid)
+WHERE u.colloid <> 0
+  AND u.colloid IN (SELECT c2.oid FROM pg_collation c2
+                     WHERE c2.collversion IS NOT NULL
+                       AND c2.collversion IS DISTINCT FROM pg_collation_actual_version(c2.oid))
+GROUP BY 1, 2, 3, c.oid
+ORDER BY 1, 2;
+\endif
 
 \qecho <br>
 \qecho <h3>Remediation:</h3>

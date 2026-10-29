@@ -8,6 +8,7 @@
 - [Modern viewer: traffic-light report](#modern-viewer-traffic-light-report)
 - [PG Collector output](#pg-collector-output)
 - [How to run PG Collector script](#how-to-run-pg-collector-script--pg_collectorsql-)
+- [Running against a production database (read-only)](#running-against-a-production-database-read-only)
 - [Selective Section Execution](#selective-section-execution)
 - [PG Collector & AI](#pg-collector--ai)
 - [Notes](#notes)
@@ -269,6 +270,94 @@ mohamed@mydevhost ~ %ls -lhrt /tmp/pg_collector_*
 ```
 5-  open the report using any internet browser
 
+
+## Running against a production database (read-only)
+
+PG Collector only reads. The script issues no `INSERT`, `UPDATE`, `DELETE`,
+`CREATE`, `ALTER`, `DROP`, `GRANT`, `VACUUM` or `ANALYZE`; it creates no tables,
+no functions and no extensions, and it calls no side-effecting server function.
+The single change it makes to anything is `SET statement_timeout = '5min'` on
+its own session, which lasts only as long as that connection.
+
+That is checked, not asserted. `tests/lint/check_safety.py` tokenizes the
+script and fails the build if any one of its 597 statements is write-class, and
+the runtime harness additionally runs the whole thing as an unprivileged role
+and diffs every non-catalog relation before and after.
+
+Being read-only by construction and being *prevented* from writing are still
+different guarantees, though, and on a production database you may want the
+second one. Both options below were verified against PostgreSQL 19 to produce a
+report identical to a superuser run - same 50 sections, same 220 tables, zero
+errors.
+
+### Option 1: enforce read-only on the connection
+
+The quickest. Nothing to set up, and the server rejects any write attempt
+regardless of what the script contains:
+
+```bash
+PGOPTIONS="-c default_transaction_read_only=on" \
+    psql -h [host] -p [port] -d [dbname] -U [user] -f pg_collector.sql
+```
+
+### Option 2: a dedicated read-only role
+
+Better for anything recurring, because the guarantee lives with the role rather
+than with whoever remembers the environment variable:
+
+```sql
+CREATE ROLE pgc_readonly LOGIN PASSWORD '...';
+GRANT CONNECT ON DATABASE [dbname] TO pgc_readonly;
+GRANT USAGE ON SCHEMA public TO pgc_readonly;
+
+-- Predefined read-only roles. These exist from PostgreSQL 10.
+GRANT pg_read_all_stats, pg_read_all_settings, pg_monitor TO pgc_readonly;
+
+-- PostgreSQL 14 and later only. On 13 and earlier, grant SELECT per schema:
+--   GRANT SELECT ON ALL TABLES IN SCHEMA [schema] TO pgc_readonly;
+--   GRANT SELECT ON ALL SEQUENCES IN SCHEMA [schema] TO pgc_readonly;
+GRANT pg_read_all_data TO pgc_readonly;
+
+-- Two objects default to superuser-only and are read-only; without these the
+-- pg_config and pg_hba.conf sections come back empty rather than erroring.
+GRANT EXECUTE ON FUNCTION pg_config() TO pgc_readonly;
+GRANT EXECUTE ON FUNCTION pg_hba_file_rules() TO pgc_readonly;
+GRANT SELECT ON pg_hba_file_rules TO pgc_readonly;   -- PG13 needs the view too
+
+-- Belt and braces: every transaction this role opens is read-only.
+ALTER ROLE pgc_readonly SET default_transaction_read_only = on;
+```
+
+Then run as that role:
+
+```bash
+psql -h [host] -p [port] -d [dbname] -U pgc_readonly -f pg_collector.sql
+```
+
+To confirm the session really is read-only:
+
+```
+=> show default_transaction_read_only;
+ on
+=> create table should_fail(i int);
+ERROR:  cannot execute CREATE TABLE in a read-only transaction
+```
+
+### Note on sequences before PostgreSQL 14
+
+`pg_sequences.last_value` returns `NULL`, not an error, for a sequence the
+caller cannot `SELECT`. On PG13 and earlier - where there is no
+`pg_read_all_data` to cover it - a role missing sequence privileges makes the
+"sequence approaching its maximum" check report *OK* rather than failing
+loudly. Grant `SELECT ON ALL SEQUENCES` if you want that check to be
+trustworthy.
+
+### Running against a standby
+
+A hot standby is read-only by definition and is a good place to run this. The
+report notes the server's role (Primary or Standby) in its header. Some
+sections read cluster-wide write activity that is quieter on a replica, so
+prefer the primary when you are diagnosing write-path problems.
 
 ## Selective Section Execution 
 

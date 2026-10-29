@@ -292,13 +292,60 @@ errors.
 
 ### Option 1: enforce read-only on the connection
 
-The quickest. Nothing to set up, and the server rejects any write attempt
-regardless of what the script contains:
+**There is no `--read-only` switch in psql** - the flag does not exist. What
+does exist is a libpq connection parameter, `options`, which hands a server
+setting to the backend at connect time. Put it in the connection string and the
+whole thing stays on one command line:
+
+```bash
+psql "host=[host] port=[port] dbname=[dbname] user=[user] \
+      options='-c default_transaction_read_only=on'" \
+     -f pg_collector.sql
+```
+
+The same setting via the environment, if you prefer flags to a connection
+string:
 
 ```bash
 PGOPTIONS="-c default_transaction_read_only=on" \
     psql -h [host] -p [port] -d [dbname] -U [user] -f pg_collector.sql
 ```
+
+Or set it as the first thing the session does, which works because psql runs
+`-c` and `-f` in the order given, on one connection:
+
+```bash
+psql -h [host] -p [port] -d [dbname] -U [user] \
+     -c "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY" \
+     -f pg_collector.sql
+```
+
+All three were verified on PostgreSQL 19 to reject every write class:
+
+```
+ERROR:  cannot execute INSERT in a read-only transaction
+ERROR:  cannot execute UPDATE in a read-only transaction
+ERROR:  cannot execute DELETE in a read-only transaction
+ERROR:  cannot execute TRUNCATE TABLE in a read-only transaction
+ERROR:  cannot execute CREATE TABLE in a read-only transaction
+```
+
+**Know what this does and does not buy you.**
+`default_transaction_read_only` has `USERSET` context, which means any session
+can turn it back off:
+
+```sql
+SET default_transaction_read_only = off;   -- succeeds, for any role
+INSERT INTO ...                            -- now writes
+```
+
+So it is a guardrail against accidents, not a security boundary. It is a sound
+guardrail *for this script specifically*, because the script cannot quietly
+escape it: `tests/lint/check_safety.py` allowlists only `statement_timeout`,
+`lock_timeout` and `idle_in_transaction_session_timeout`, so a
+`SET default_transaction_read_only = off` anywhere in `pg_collector.sql` fails
+the build. If you want a guarantee that does not depend on the script being
+honest, use Option 2 - privileges cannot be switched off with `SET`.
 
 ### Option 2: a dedicated read-only role
 

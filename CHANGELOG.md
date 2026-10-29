@@ -74,6 +74,18 @@ All notable changes to pg collector will be documented in this file.
     cache scan, and the Aurora Limitless single-shard call ratio.
     tests/lint/check_div_by_zero.py now fails the build on any new occurrence.
 
+15- The Collation / glibc index risk section now names the indexes to rebuild
+    and emits the statement that rebuilds each one, rather than leaving the
+    reader to work out which objects a version mismatch applies to. Both the
+    named-collation listing and the pre-PG15 database-default listing carry a
+    rebuild_with column holding a ready REINDEX INDEX CONCURRENTLY statement
+    with identifiers already quoted. Both are now ordered PRIMARY KEY first,
+    then UNIQUE, then size: a changed ordering means uniqueness was never
+    actually enforced, so those indexes may already hold duplicates that
+    REINDEX will refuse to rebuild over, which makes them the ones to look at
+    first regardless of size. On PG13 and PG14 the database-default list was
+    previously a count only - the blast radius without the addresses.
+
 14- Made the whole script run clean on PostgreSQL 13 through 19. Previously a
     PG13 server produced 26 errors and PG15 produced 15, because queries
     referencing catalog objects from a later major abort rather than degrade.

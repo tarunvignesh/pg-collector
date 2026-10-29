@@ -5837,6 +5837,39 @@ SELECT (SELECT max(pg_collation_actual_version(c2.oid))
        count(*) FILTER (WHERE indisunique AND NOT indisprimary)  AS unique_indexes,
        pg_size_pretty(coalesce(sum(pg_relation_size(indexrelid)), 0)) AS total_index_size
 FROM on_default;
+
+\qecho <br>
+\qecho <h3>Which indexes - named, largest 200:</h3>
+\qecho <h4>Note: a count tells you how exposed you are; it does not tell you what to do on Monday. These are the indexes themselves, largest first, with the statement that rebuilds each one. PRIMARY KEY and UNIQUE entries come first within each size band because a wrong ordering means uniqueness was never actually enforced, so those may already hold duplicates that REINDEX will refuse to rebuild over.</h4>
+\qecho <h4>This list is the blast radius, not a diagnosis: this server cannot confirm the default collation changed. Work through it only if this data directory crossed an OS upgrade.</h4>
+\qecho <br>
+WITH defcoll AS (
+    SELECT oid FROM pg_collation
+     WHERE collname = 'default' AND collnamespace = 'pg_catalog'::regnamespace
+),
+on_default AS (
+    SELECT DISTINCT i.indexrelid, i.indrelid, i.indisunique, i.indisprimary
+      FROM pg_index i
+      CROSS JOIN LATERAL unnest(i.indcollation::oid[]) AS u(colloid)
+     WHERE u.colloid = (SELECT oid FROM defcoll)
+)
+SELECT n.nspname                                          AS schema,
+       tc.relname                                         AS table_name,
+       ic.relname                                         AS index_name,
+       CASE WHEN d.indisprimary THEN 'PRIMARY KEY'
+            WHEN d.indisunique  THEN 'UNIQUE'
+            ELSE 'index' END                              AS index_kind,
+       pg_size_pretty(pg_relation_size(d.indexrelid))     AS index_size,
+       'REINDEX INDEX CONCURRENTLY ' ||
+         quote_ident(n.nspname) || '.' || quote_ident(ic.relname) || ';'
+                                                          AS rebuild_with,
+       pg_relation_size(d.indexrelid)                     AS size_bytes
+FROM on_default d
+JOIN pg_class ic    ON ic.oid = d.indexrelid
+JOIN pg_class tc    ON tc.oid = d.indrelid
+JOIN pg_namespace n ON n.oid  = tc.relnamespace
+ORDER BY d.indisprimary DESC, d.indisunique DESC, size_bytes DESC
+LIMIT 200;
 \endif
 
 \qecho <br>
@@ -5866,6 +5899,9 @@ db_state AS (
        AND d.datcollversion IS DISTINCT FROM pg_database_collation_actual_version(d.oid)
 )
 SELECT DISTINCT
+       CASE WHEN i.indisprimary THEN 1
+            WHEN i.indisunique  THEN 2
+            ELSE 3 END                                  AS urgency,
        n.nspname                                        AS schema,
        tc.relname                                       AS table_name,
        ic.relname                                       AS index_name,
@@ -5876,6 +5912,9 @@ SELECT DISTINCT
        coalesce(cs.recorded_version, db.recorded_version) AS recorded_version,
        coalesce(cs.os_version, db.os_version)           AS os_version,
        pg_size_pretty(pg_relation_size(i.indexrelid))   AS index_size,
+       'REINDEX INDEX CONCURRENTLY ' ||
+         quote_ident(n.nspname) || '.' || quote_ident(ic.relname) || ';'
+                                                        AS rebuild_with,
        pg_relation_size(i.indexrelid)                   AS size_bytes
 FROM pg_index i
 JOIN pg_class ic    ON ic.oid = i.indexrelid
@@ -5886,7 +5925,7 @@ LEFT JOIN coll_state cs ON cs.colloid = u.colloid
 LEFT JOIN db_state db   ON u.colloid = (SELECT oid FROM defcoll)
 WHERE u.colloid <> 0
   AND (cs.colloid IS NOT NULL OR db.recorded_version IS NOT NULL)
-ORDER BY size_bytes DESC
+ORDER BY urgency, size_bytes DESC
 LIMIT 200;
 \else
 WITH coll_state AS (
@@ -5900,6 +5939,9 @@ WITH coll_state AS (
        AND c.collversion IS DISTINCT FROM pg_collation_actual_version(c.oid)
 )
 SELECT DISTINCT
+       CASE WHEN i.indisprimary THEN 1
+            WHEN i.indisunique  THEN 2
+            ELSE 3 END                                  AS urgency,
        n.nspname                                        AS schema,
        tc.relname                                       AS table_name,
        ic.relname                                       AS index_name,
@@ -5910,6 +5952,9 @@ SELECT DISTINCT
        cs.recorded_version                              AS recorded_version,
        cs.os_version                                    AS os_version,
        pg_size_pretty(pg_relation_size(i.indexrelid))   AS index_size,
+       'REINDEX INDEX CONCURRENTLY ' ||
+         quote_ident(n.nspname) || '.' || quote_ident(ic.relname) || ';'
+                                                        AS rebuild_with,
        pg_relation_size(i.indexrelid)                   AS size_bytes
 FROM pg_index i
 JOIN pg_class ic    ON ic.oid = i.indexrelid
@@ -5918,7 +5963,7 @@ JOIN pg_namespace n ON n.oid  = tc.relnamespace
 CROSS JOIN LATERAL unnest(i.indcollation::oid[]) AS u(colloid)
 JOIN coll_state cs  ON cs.colloid = u.colloid
 WHERE u.colloid <> 0
-ORDER BY size_bytes DESC
+ORDER BY urgency, size_bytes DESC
 LIMIT 200;
 \endif
 

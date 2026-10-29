@@ -51,6 +51,15 @@ we expected. All three must pass for a change to merge.
   are replaced with placeholders before parsing. Catches syntax bugs that
   only show up against specific PG majors.
 
+- `check_dialect.py` also expands *SQL-fragment* psql variables. Several
+  statements vary their select list by server or pgss version through a
+  `\set`-held fragment rather than being duplicated under `\if`; each is
+  parsed once per expansion. This is not pedantry -- the failure mode those
+  fragments invite is a dangling comma on the preceding line, which parses
+  fine while the fragment is non-empty and breaks the moment it is empty, on
+  exactly the old servers nobody tests against. Fragment values live in
+  `FRAGMENT_VARS`; add to it when adding a fragment.
+
 - `check_div_by_zero.py` — every division's divisor is classified, and a
   live statistics counter in a denominator fails the build unless it is
   guarded. A parse check cannot catch this: `rows / calls` is valid SQL

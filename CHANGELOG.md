@@ -74,6 +74,24 @@ All notable changes to pg collector will be documented in this file.
     cache scan, and the Aurora Limitless single-shard call ratio.
     tests/lint/check_div_by_zero.py now fails the build on any new occurrence.
 
+14- Made the whole script run clean on PostgreSQL 13 through 19. Previously a
+    PG13 server produced 26 errors and PG15 produced 15, because queries
+    referencing catalog objects from a later major abort rather than degrade.
+    Two kinds of gate now cover them:
+    - Server-version flags (v_pg14/15/16/17), gating pg_stat_replication_slots,
+      pg_stat_wal, pg_stat_progress_copy, the pg_stat_database session
+      counters, pg_parameter_acl, pg_auth_members.inherit_option/set_option,
+      the PG17 pg_stat_progress_vacuum byte counters (which fall back to the
+      older tuple counters rather than being dropped), and the datlocprovider
+      /datlocale/daticurules columns of the database list.
+    - pg_stat_statements capability flags read from the catalog rather than
+      parsed from extversion, assembling the Top SQL column tail from
+      fragments. The three parallel-worker rankings are omitted wholesale when
+      those columns are absent, since the ranking is the column.
+    Verified PASS with zero errors on PG13, 14, 15, 16, 17 and 19; section
+    counts stay at 50 on every major and table counts rise with version
+    (213 on PG13 to 221 on PG19) as later servers expose more.
+
 13- Version-gated the Collation / glibc index risk section so it works on
     PostgreSQL 13 and 14 instead of erroring. pg_database.datcollversion and
     pg_database_collation_actual_version() are PG15+, but

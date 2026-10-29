@@ -113,6 +113,78 @@ SELECT CASE WHEN :'help' = ':help' THEN 'f' ELSE :'help' END AS "help" \gset
 \endif
 SET statement_timeout = '5min';
 \echo 'statement_timeout set to 5 minutes. To change, edit the SET statement_timeout line in the script.'
+
+-- Server-version gates.
+--
+-- This branch targets PG19, and upstream's model is one branch per major, so
+-- most queries here assume current catalogs. A query that references a catalog
+-- object introduced in a later major does not degrade -- it aborts, and the
+-- section renders as an error in the report instead of as data. Where the
+-- object is genuinely absent (rather than merely spelled differently) the only
+-- honest options are to gate the query or to ship a different script.
+--
+-- These flags gate it. On an older server the report is smaller but clean.
+-- Each use sites explains which object it is protecting.
+SELECT current_setting('server_version_num')::int >= 140000 AS v_pg14,
+       current_setting('server_version_num')::int >= 150000 AS v_pg15,
+       current_setting('server_version_num')::int >= 160000 AS v_pg16,
+       current_setting('server_version_num')::int >= 170000 AS v_pg17 \gset
+
+-- pg_stat_activity.query_id is PG14+, and four statements differ only in that
+-- one column. Duplicating all four under \if would be forty lines of near
+-- identical SQL to maintain in parallel, so the column expression is chosen
+-- once here instead: psql substitutes the text before the server parses it,
+-- which is the part that matters -- an unknown column fails at parse time even
+-- on a CASE branch that can never be taken, so gating inside the SQL does not
+-- work.
+\if :v_pg14
+\set qid 'query_id'
+\else
+\set qid 'NULL::bigint AS query_id'
+\endif
+
+-- pg_stat_statements column availability. The Top SQL queries select a tail of
+-- columns that arrived across pgss 1.10 (temp_blk_*_time), 1.11 (stats_since)
+-- and PG18 (parallel_workers_*, generic/custom_plan_calls, wal_buffers_full).
+-- One missing column aborts the whole query, so the tail is assembled from
+-- fragments chosen here.
+SELECT
+  count(*) FILTER (WHERE a.attname = 'parallel_workers_to_launch') > 0 AS v_pgss_parallel,
+  count(*) FILTER (WHERE a.attname = 'generic_plan_calls')         > 0 AS v_pgss_plancalls,
+  count(*) FILTER (WHERE a.attname = 'stats_since')                > 0 AS v_pgss_statssince,
+  count(*) FILTER (WHERE a.attname = 'temp_blk_write_time')        > 0 AS v_pgss_tempblktime,
+  count(*) FILTER (WHERE a.attname = 'wal_buffers_full')           > 0 AS v_pgss_walbuffers
+FROM pg_catalog.pg_class c
+JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
+WHERE c.relname = 'pg_stat_statements' \gset
+
+\if :v_pgss_parallel
+\set pgss_parallel_cols ', parallel_workers_to_launch, parallel_workers_launched'
+\else
+\set pgss_parallel_cols ''
+\endif
+\if :v_pgss_plancalls
+\set pgss_plan_cols ', generic_plan_calls, custom_plan_calls'
+\else
+\set pgss_plan_cols ''
+\endif
+\if :v_pgss_statssince
+\set pgss_since_cols ', stats_since, minmax_stats_since'
+\else
+\set pgss_since_cols ''
+\endif
+\if :v_pgss_tempblktime
+\set pgss_tempblk_write ', temp_blk_write_time'
+\set pgss_tempblk_read ', temp_blk_read_time'
+\else
+\set pgss_tempblk_write ''
+\set pgss_tempblk_read ''
+\endif
+\if :v_pgss_walbuffers
+\set pgss_walbuffers_col ', wal_buffers_full'
+\else
+\set pgss_walbuffers_col ''
+\endif
 -- Resolve fullmod: default 't' (full mode) if not passed
 \set fullmod :fullmod
 SELECT CASE WHEN :'fullmod' = ':fullmod' THEN 't' ELSE :'fullmod' END AS "fullmod" \gset
@@ -767,6 +839,7 @@ SELECT
 FROM pg_database;
 \qecho <br>
 \qecho <br>
+\if :v_pg17
 SELECT
   d.datname as "Name",
   pg_catalog.pg_get_userbyid(d.datdba) as "Owner",
@@ -786,6 +859,24 @@ SELECT
 FROM pg_catalog.pg_database d
   JOIN pg_catalog.pg_tablespace t on d.dattablespace = t.oid
 ORDER BY 1;
+\else
+SELECT
+  d.datname as "Name",
+  pg_catalog.pg_get_userbyid(d.datdba) as "Owner",
+  pg_catalog.pg_encoding_to_char(d.encoding) as "Encoding",
+  d.datcollate as "Collate",
+  d.datctype as "Ctype",
+  CASE WHEN pg_catalog.array_length(d.datacl, 1) = 0 THEN '(none)' ELSE pg_catalog.array_to_string(d.datacl, E'\n') END AS "Access privileges",
+  CASE WHEN pg_catalog.has_database_privilege(d.datname, 'CONNECT')
+       THEN pg_catalog.pg_size_pretty(pg_catalog.pg_database_size(d.datname))
+       ELSE 'No Access'
+  END as "Size",
+  t.spcname as "Tablespace",
+  pg_catalog.shobj_description(d.oid, 'pg_database') as "Description"
+FROM pg_catalog.pg_database d
+  JOIN pg_catalog.pg_tablespace t on d.dattablespace = t.oid
+ORDER BY 1;
+\endif
 \qecho <br>
 select * from pg_database; 
 \qecho <br>
@@ -1328,7 +1419,12 @@ select count(*) > 0 obsrv_autovacuum_freeze_max_age FROM pg_settings WHERE name 
 ---------------------------------------------------------------------------------
 -- Check for logical replication spills                                        --
 ---------------------------------------------------------------------------------
+-- pg_stat_replication_slots is PG14+.
+\if :v_pg14
 select count(*) > 0 obsrv_logical_replication_spills from pg_stat_replication_slots where spill_count > 0 and spill_bytes > 0 \gset
+\else
+select false as obsrv_logical_replication_spills \gset
+\endif
 
 \if :obsrv_logical_replication_spills
      \qecho <br>
@@ -1743,6 +1839,7 @@ now() - pg_stat_activity.query_start AS duration,
 
 \qecho <h3>vacuum progress process:</h3>
 
+\if :v_pg17
 SELECT p.pid, now() - a.xact_start AS duration, coalesce(wait_event_type ||'.'|| wait_event, 'f') AS waiting, 
   CASE WHEN a.query ~ '^autovacuum.*to prevent wraparound' THEN 'wraparound' WHEN a.query ~ '^vacuum' THEN 'user' ELSE 'regular' END AS mode, 
   p.datname AS database, p.relid::regclass AS table, p.phase, a.query ,
@@ -1761,6 +1858,24 @@ SELECT p.pid, now() - a.xact_start AS duration, coalesce(wait_event_type ||'.'||
 FROM pg_stat_progress_vacuum p JOIN pg_stat_activity a using (pid) 
      join pg_stat_all_tables s on s.relid = p.relid
 ORDER BY now() - a.xact_start DESC;
+\else
+SELECT p.pid, now() - a.xact_start AS duration, coalesce(wait_event_type ||'.'|| wait_event, 'f') AS waiting, 
+  CASE WHEN a.query ~ '^autovacuum.*to prevent wraparound' THEN 'wraparound' WHEN a.query ~ '^vacuum' THEN 'user' ELSE 'regular' END AS mode, 
+  p.datname AS database, p.relid::regclass AS table, p.phase, a.query ,
+  pg_size_pretty(p.heap_blks_total * current_setting('block_size')::int) AS table_size, 
+  pg_size_pretty(pg_total_relation_size(p.relid)) AS total_size, 
+  pg_size_pretty(p.heap_blks_scanned * current_setting('block_size')::int) AS scanned, 
+  pg_size_pretty(p.heap_blks_vacuumed * current_setting('block_size')::int) AS vacuumed, 
+  round(100.0 * p.heap_blks_scanned / nullif(p.heap_blks_total, 0), 1) AS scanned_pct, 
+  round(100.0 * p.heap_blks_vacuumed / nullif(p.heap_blks_total, 0), 1) AS vacuumed_pct, 
+  p.index_vacuum_count,
+  p.max_dead_tuples as dead_tuples_per_cycle,
+  s.n_dead_tup as total_num_dead_tuples ,
+  ceil(p.num_dead_tuples::float/nullif(p.max_dead_tuples::float, 0)) index_cycles_required
+FROM pg_stat_progress_vacuum p JOIN pg_stat_activity a using (pid) 
+     join pg_stat_all_tables s on s.relid = p.relid
+ORDER BY now() - a.xact_start DESC;
+\endif
 
 
 
@@ -2079,6 +2194,7 @@ now() - pg_stat_activity.query_start AS duration,
 \qecho <h3>Vacuum progress:</h3>
 \qecho <br>
 \qecho <details>
+\if :v_pg17
 SELECT p.pid, now() - a.xact_start AS duration, coalesce(wait_event_type ||'.'|| wait_event, 'f') AS waiting, 
   CASE WHEN a.query ~ '^autovacuum.*to prevent wraparound' THEN 'wraparound' WHEN a.query ~ '^vacuum' THEN 'user' ELSE 'regular' END AS mode, 
   p.datname AS database, p.relid::regclass AS table, p.phase, a.query ,
@@ -2097,6 +2213,24 @@ SELECT p.pid, now() - a.xact_start AS duration, coalesce(wait_event_type ||'.'||
 FROM pg_stat_progress_vacuum p JOIN pg_stat_activity a using (pid) 
      join pg_stat_all_tables s on s.relid = p.relid
 ORDER BY now() - a.xact_start DESC;
+\else
+SELECT p.pid, now() - a.xact_start AS duration, coalesce(wait_event_type ||'.'|| wait_event, 'f') AS waiting, 
+  CASE WHEN a.query ~ '^autovacuum.*to prevent wraparound' THEN 'wraparound' WHEN a.query ~ '^vacuum' THEN 'user' ELSE 'regular' END AS mode, 
+  p.datname AS database, p.relid::regclass AS table, p.phase, a.query ,
+  pg_size_pretty(p.heap_blks_total * current_setting('block_size')::int) AS table_size, 
+  pg_size_pretty(pg_total_relation_size(p.relid)) AS total_size, 
+  pg_size_pretty(p.heap_blks_scanned * current_setting('block_size')::int) AS scanned, 
+  pg_size_pretty(p.heap_blks_vacuumed * current_setting('block_size')::int) AS vacuumed, 
+  round(100.0 * p.heap_blks_scanned / nullif(p.heap_blks_total, 0), 1) AS scanned_pct, 
+  round(100.0 * p.heap_blks_vacuumed / nullif(p.heap_blks_total, 0), 1) AS vacuumed_pct, 
+  p.index_vacuum_count,
+  p.max_dead_tuples as dead_tuples_per_cycle,
+  s.n_dead_tup as total_num_dead_tuples ,
+  ceil(p.num_dead_tuples::float/nullif(p.max_dead_tuples::float, 0)) index_cycles_required
+FROM pg_stat_progress_vacuum p JOIN pg_stat_activity a using (pid) 
+     join pg_stat_all_tables s on s.relid = p.relid
+ORDER BY now() - a.xact_start DESC;
+\endif
 \qecho </details>
 \qecho <br>
 \qecho <h3>Autovacuum progress per day: </h3>
@@ -2452,7 +2586,11 @@ order by name;
 \qecho <details>
 \qecho <h4> The statistics of the pg_stat_statements module itself are tracked and made available via a view named pg_stat_statements_info </h4>
 \qecho <h4> dealloc column show the Total number of times pg_stat_statements entries about the least-executed statements were deallocated because more distinct statements than pg_stat_statements.max were observed </h4> 
+\if :v_pgss_statssince
 select * from pg_stat_statements_info ;
+\else
+\qecho <h4>Note: the pg_stat_statements_info view requires pg_stat_statements 1.9 or later (PostgreSQL 14).</h4>
+\endif
 \qecho </details>
 \qecho <br>
 \qecho <h3> Top SQL order by total_exec_time: </h3>
@@ -2468,13 +2606,10 @@ round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
 round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
-round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent,
-parallel_workers_to_launch,
-parallel_workers_launched,
-generic_plan_calls,
-custom_plan_calls,
-stats_since,
-minmax_stats_since
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
+:pgss_parallel_cols
+:pgss_plan_cols
+:pgss_since_cols
 from pg_stat_statements 
 order by total_time_Msec desc limit 20;
 
@@ -2494,13 +2629,10 @@ round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
 round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
-round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent,
-parallel_workers_to_launch,
-parallel_workers_launched,
-generic_plan_calls,
-custom_plan_calls,
-stats_since,
-minmax_stats_since
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
+:pgss_parallel_cols
+:pgss_plan_cols
+:pgss_since_cols
 from pg_stat_statements 
 order by avg_time_Msec desc limit 20;
 
@@ -2520,13 +2652,10 @@ round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
 round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
-round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent,
-parallel_workers_to_launch,
-parallel_workers_launched,
-generic_plan_calls,
-custom_plan_calls,
-stats_since,
-minmax_stats_since
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
+:pgss_parallel_cols
+:pgss_plan_cols
+:pgss_since_cols
 from pg_stat_statements 
 order by percent desc limit 20;
 
@@ -2546,13 +2675,10 @@ round((mean_exec_time::numeric/1000),2) as avg_time_sec,
 round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec, 
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
 round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
-round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent,
-parallel_workers_to_launch,
-parallel_workers_launched,
-generic_plan_calls,
-custom_plan_calls,
-stats_since,
-minmax_stats_since
+round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent
+:pgss_parallel_cols
+:pgss_plan_cols
+:pgss_since_cols
 from pg_stat_statements 
 order by calls desc limit 20;
 
@@ -2573,13 +2699,10 @@ round(stddev_exec_time::numeric, 2) as standard_deviation_time_Msec,
 round((stddev_exec_time::numeric/1000), 2) as standard_deviation_time_sec, 
 round(rows::numeric / nullif(calls, 0),2) rows_per_exec,
 round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) as percent,
-shared_blks_read,
-parallel_workers_to_launch,
-parallel_workers_launched,
-generic_plan_calls,
-custom_plan_calls,
-stats_since,
-minmax_stats_since
+shared_blks_read
+:pgss_parallel_cols
+:pgss_plan_cols
+:pgss_since_cols
 from pg_stat_statements 
 order by shared_blks_read desc limit 20;
 
@@ -2611,13 +2734,10 @@ SELECT
     pg_size_pretty((local_blks_read * current_setting('block_size')::int) / nullif(calls, 0)) local_blks_read_per_call,
     pg_size_pretty((local_blks_written * current_setting('block_size')::int) / nullif(calls, 0)) local_blks_written_per_call,
     (local_blks_read + local_blks_written) * 8 * 1024 AS total_local_blks_bytes,
-    pg_size_pretty((local_blks_read + local_blks_written) * 8 * 1024) AS total_local_blks_size,
-    parallel_workers_to_launch,
-    parallel_workers_launched,
-    generic_plan_calls,
-    custom_plan_calls,
-    stats_since,
-    minmax_stats_since
+    pg_size_pretty((local_blks_read + local_blks_written) * 8 * 1024) AS total_local_blks_size
+:pgss_parallel_cols
+:pgss_plan_cols
+:pgss_since_cols
 FROM
     pg_stat_statements
 WHERE
@@ -2647,21 +2767,20 @@ SELECT
     round(ROWS::numeric / nullif(calls, 0), 2) rows_per_exec,
     round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 4) AS DB_time_percent,
     temp_blks_written,
-    pg_size_pretty(temp_blks_written * 8 * 1024) AS temp_blks_written_size,
-    temp_blk_write_time,
+    pg_size_pretty(temp_blks_written * 8 * 1024) AS temp_blks_written_size
+    :pgss_tempblk_write
+    ,
     temp_blks_read,
-    pg_size_pretty(temp_blks_read * 8 * 1024) AS temp_blks_read_size,
-    temp_blk_read_time,
+    pg_size_pretty(temp_blks_read * 8 * 1024) AS temp_blks_read_size
+    :pgss_tempblk_read
+    ,
     pg_size_pretty((temp_blks_read * current_setting('block_size')::int) / nullif(calls, 0)) temp_blks_read_per_call,
     pg_size_pretty((temp_blks_written * current_setting('block_size')::int) / nullif(calls, 0)) temp_blks_written_per_call,
     (temp_blks_read + temp_blks_written) * 8 * 1024 AS total_temp_blks_bytes,
-    pg_size_pretty((temp_blks_read + temp_blks_written) * 8 * 1024) AS total_temp_blks_size,
-    parallel_workers_to_launch,
-    parallel_workers_launched,
-    generic_plan_calls,
-    custom_plan_calls,
-    stats_since,
-    minmax_stats_since
+    pg_size_pretty((temp_blks_read + temp_blks_written) * 8 * 1024) AS total_temp_blks_size
+:pgss_parallel_cols
+:pgss_plan_cols
+:pgss_since_cols
 FROM
     pg_stat_statements
 WHERE
@@ -2671,6 +2790,7 @@ LIMIT 20;
 
 \qecho </details>
 
+\if :v_pgss_parallel
 \qecho <br>
 \qecho <h3> Top SQL order by Parallel Workers Launched: </h3>
 \qecho <br>
@@ -2751,6 +2871,11 @@ WHERE
 ORDER BY (parallel_workers_to_launch - parallel_workers_launched) DESC
 LIMIT 20;
 \qecho </details>
+\else
+\qecho <br>
+\qecho <h3> Top SQL by parallel worker usage: </h3>
+\qecho <h4>Note: pg_stat_statements on this server does not expose parallel_workers_to_launch or parallel_workers_launched. Those columns arrived in PostgreSQL 18, so the three parallel-worker rankings are omitted.</h4>
+\endif
 
 \qecho <br>
 \qecho <h3> Top SQL order by WAL Generation: </h3>
@@ -2768,12 +2893,10 @@ SELECT
     wal_fpi,
     wal_bytes,
     pg_size_pretty(wal_bytes::bigint) AS wal_bytes_pretty,
-    round((wal_bytes / NULLIF(calls, 0))::numeric, 2) AS wal_bytes_per_call,
-    wal_buffers_full,
-    generic_plan_calls,
-    custom_plan_calls,
-    stats_since,
-    minmax_stats_since
+    round((wal_bytes / NULLIF(calls, 0))::numeric, 2) AS wal_bytes_per_call
+    :pgss_walbuffers_col
+:pgss_plan_cols
+:pgss_since_cols
 FROM
     pg_stat_statements
 WHERE
@@ -2823,6 +2946,7 @@ ORDER BY 1, 2;
 select * FROM pg_user;
 \qecho <br>
 \qecho <h3> List of role grants: </h3>
+\if :v_pg16
 SELECT m.rolname AS "Role name", r.rolname AS "Member of",
   pg_catalog.concat_ws(', ',
     CASE WHEN pam.admin_option THEN 'ADMIN' END,
@@ -2836,6 +2960,20 @@ FROM pg_catalog.pg_roles m
      LEFT JOIN pg_catalog.pg_roles g ON (pam.grantor = g.oid)
 WHERE m.rolname !~ '^pg_'
 ORDER BY 1, 2, 4;
+\else
+SELECT m.rolname AS "Role name", r.rolname AS "Member of",
+  pg_catalog.concat_ws(', ',
+    CASE WHEN pam.admin_option THEN 'ADMIN' END,
+    NULL
+  ) AS "Options",
+  g.rolname AS "Grantor"
+FROM pg_catalog.pg_roles m
+     JOIN pg_catalog.pg_auth_members pam ON (pam.member = m.oid)
+     LEFT JOIN pg_catalog.pg_roles r ON (pam.roleid = r.oid)
+     LEFT JOIN pg_catalog.pg_roles g ON (pam.grantor = g.oid)
+WHERE m.rolname !~ '^pg_'
+ORDER BY 1, 2, 4;
+\endif
 \qecho </details>
 
 
@@ -3664,7 +3802,11 @@ order by safe_wal_size ;
 \qecho   </ul>
 \qecho </li>
 \qecho </ul>
+\if :v_pg14
 SELECT * FROM pg_stat_replication_slots order by spill_bytes;
+\else
+\qecho <h4>Note: the pg_stat_replication_slots view, which reports logical decoding spill activity, requires PostgreSQL 14 or later.</h4>
+\endif
 
 \qecho <h3>Replication Parameters :</h3> 
 select 
@@ -3705,6 +3847,9 @@ select  name as parameter_name , setting , short_desc from pg_settings WHERE nam
 \qecho <h3>Sessions statistics:</h3>
 \qecho <br>
 \qecho <details>
+-- Every column below (session_time through sessions_killed) was added to
+-- pg_stat_database in PG14; there is no older equivalent to fall back to.
+\if :v_pg14
 select 
 datname as Database_name
 ,session_time
@@ -3717,6 +3862,9 @@ datname as Database_name
 from pg_stat_database 
 where datname is not null 
 order by active_time desc ;
+\else
+\qecho <h4>Note: per-database session timing requires PostgreSQL 14 or later, where session_time, active_time and the sessions_* counters were added to pg_stat_database.</h4>
+\endif
 \qecho </details>
 \qecho <br>
 \qecho <h3> DB/Connections count :</h3>
@@ -3764,7 +3912,7 @@ SELECT usename as "User_Name" , state as status , query, count(*) FROM pg_stat_a
 \qecho <h3> username/status/query_id/count : </h3>
 \qecho <br>
 \qecho <details>
-SELECT usename as "User_Name" , state as status , query_id, count(*) FROM pg_stat_activity where datname is not null group by usename,state,query_id ;
+SELECT usename as "User_Name" , state as status , :qid, count(*) FROM pg_stat_activity where datname is not null group by 1,2,3 ;
 \qecho </details>
 \qecho <br>
 \qecho <h3>Active sessions:</h3>
@@ -3774,7 +3922,7 @@ SELECT usename as "User_Name" , state as status , query_id, count(*) FROM pg_sta
 (
     SELECT
 usename,pid, now() - pg_stat_activity.xact_start AS xact_duration ,now() - pg_stat_activity.query_start AS query_duration,
-substr(query,1,50) as query,query_id,state,wait_event
+substr(query,1,50) as query,:qid,state,wait_event
 FROM pg_stat_activity
 ) as s where (xact_duration is not null  or query_duration is not null ) and state!='idle' and query not like '%active_session_monitor%'
 order by xact_duration desc, query_duration desc;
@@ -4293,7 +4441,7 @@ JOIN (
         wait_event,
         usename AS user_name,
         application_name,
-        query_id,
+        :qid,
         query
     FROM
         pg_stat_activity
@@ -4842,7 +4990,7 @@ SELECT coalesce(wait_event,'CPU') as wait_event , count(*) FROM pg_stat_activity
 SELECT  coalesce(wait_event,'CPU') as wait_event, substr(query,1,150) as query,count(*) FROM pg_stat_activity   group by  query,wait_event order by 3 desc;
 \qecho <br>
 \qecho <h3>wait events/query_id  :</h3>
-SELECT  coalesce(wait_event,'CPU') as wait_event, query_id ,count(*) FROM pg_stat_activity   group by  query_id,wait_event order by 3 desc;
+SELECT  coalesce(wait_event,'CPU') as wait_event, :qid ,count(*) FROM pg_stat_activity   group by  1,2 order by 3 desc;
 \qecho <br>
 \qecho <h3>wait events/user name :</h3>
 SELECT coalesce(wait_event,'CPU') wait_event,usename as user_name, count(*) FROM pg_stat_activity group by wait_event, usename order by 3 desc ;
@@ -4884,8 +5032,10 @@ select count(*) > 0 isaurora from pg_settings where name='rds.extensions' and se
 \if :isaurora
 \qecho 'pg_stat_wal is currently not supported for Aurora'
 \else
-    \if yes
+    \if :v_pg14
         SELECT * FROM pg_stat_wal;
+    \else
+        \qecho <h4>Note: the pg_stat_wal view requires PostgreSQL 14 or later.</h4>
     \endif
 \endif
 \qecho </details>
@@ -5153,6 +5303,7 @@ ORDER BY name;
 \qecho <br>
 \qecho <br>
 \qecho <details>
+\if :v_pg16
 SELECT 
     p.parname AS parameter_name,
     s.setting AS current_value,
@@ -5171,6 +5322,9 @@ FROM pg_catalog.pg_parameter_acl p
 LEFT JOIN pg_catalog.pg_settings s ON p.parname = s.name
 CROSS JOIN LATERAL unnest(p.paracl) AS acl_entry
 ORDER BY p.parname, split_part(acl_entry::text, '=', 1);
+\else
+\qecho <h4>Note: parameter-level GRANTs are tracked in pg_catalog.pg_parameter_acl, which requires PostgreSQL 16 or later.</h4>
+\endif
 \qecho </details>
 
 \qecho <center>[<a class="noLink" href="#top">Top</a>]</center><p>
@@ -5186,7 +5340,11 @@ ORDER BY p.parname, split_part(acl_entry::text, '=', 1);
 \qecho <font size="+2" face="Arial,Helvetica,Geneva,sans-serif" color="#16191f"><b>COPY command progress</b></font><hr align="left" width="460">
 \qecho <br>
 \qecho <details>
+\if :v_pg14
 SELECT * FROM pg_stat_progress_copy ;
+\else
+\qecho <h4>Note: the pg_stat_progress_copy view requires PostgreSQL 14 or later.</h4>
+\endif
 \qecho </details>
 
 \qecho <center>[<a class="noLink" href="#top">Top</a>]</center><p>

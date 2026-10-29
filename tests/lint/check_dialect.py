@@ -163,6 +163,46 @@ VAR_QUOTED_ID = re.compile(r':"\w+"')
 VAR_BARE = re.compile(r"(?<![:\w]):\w+\b")
 
 
+# Psql variables that hold a *SQL fragment* rather than a value. The script
+# uses these to vary a select list by server or extension version without
+# duplicating the whole statement, so `NULL` is not a valid stand-in: the
+# fragment is a comma-led list of columns, or nothing at all.
+#
+# Each entry maps the variable to the spellings it can take. Every statement
+# that mentions one is parsed once per combination, which is the only way to
+# catch the failure mode these fragments invite -- a dangling comma on the
+# line before the fragment, which parses fine when the fragment is present and
+# breaks when it is empty.
+FRAGMENT_VARS = {
+    "pgss_parallel_cols": ("", ", parallel_workers_to_launch, parallel_workers_launched"),
+    "pgss_plan_cols":     ("", ", generic_plan_calls, custom_plan_calls"),
+    "pgss_since_cols":    ("", ", stats_since, minmax_stats_since"),
+    "pgss_tempblk_write": ("", ", temp_blk_write_time"),
+    "pgss_tempblk_read":  ("", ", temp_blk_read_time"),
+    "pgss_walbuffers_col": ("", ", wal_buffers_full"),
+    "qid":                ("query_id", "NULL::bigint AS query_id"),
+}
+
+FRAGMENT_RE = re.compile(
+    r":(" + "|".join(sorted(FRAGMENT_VARS, key=len, reverse=True)) + r")\b"
+)
+
+
+def fragment_variants(stmt: str) -> list[str]:
+    """Expand fragment variables into every combination they can produce."""
+    names = [n for n in FRAGMENT_VARS if re.search(r":" + n + r"\b", stmt)]
+    if not names:
+        return [stmt]
+    variants = [stmt]
+    for name in names:
+        nxt = []
+        for v in variants:
+            for value in FRAGMENT_VARS[name]:
+                nxt.append(re.sub(r":" + name + r"\b", value, v))
+        variants = nxt
+    return variants
+
+
 def substitute_vars(stmt: str) -> str:
     stmt = VAR_QUOTED_STR.sub("'PSQLVAR'", stmt)
     stmt = VAR_QUOTED_ID.sub('"PSQLVAR"', stmt)
@@ -188,17 +228,22 @@ def check(path: Path) -> int:
     skipped = 0
 
     for line, raw in statements:
-        subbed = substitute_vars(raw)
-        if is_opaque_prepare(subbed):
-            skipped += 1
-            continue
-        try:
-            parse_sql(subbed)
-            checked += 1
-        except ParseError as e:
-            errors.append(
-                f"{path}:{line}: parse error: {e}\n    statement: {raw[:160]!r}"
-            )
+        # A statement carrying SQL-fragment variables has to parse under every
+        # expansion, not just the one that happens to be substituted first.
+        for variant in fragment_variants(raw):
+            subbed = substitute_vars(variant)
+            if is_opaque_prepare(subbed):
+                skipped += 1
+                continue
+            try:
+                parse_sql(subbed)
+                checked += 1
+            except ParseError as e:
+                note = "" if variant == raw else "\n    (fragment expansion)"
+                errors.append(
+                    f"{path}:{line}: parse error: {e}{note}\n"
+                    f"    statement: {variant[:160]!r}"
+                )
 
     if errors:
         for e in errors:

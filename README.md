@@ -2,13 +2,13 @@
 
 ## Table of Contents
 - [Overview](#overview)
+- [What this fork adds](#what-this-fork-adds)
 - [PG Collector's Automated Database Health check](#pg-collectors-automated-database-health-check)
 - [PG Collector report header](#pg-collector-report-header)
 - [Example of PG Collector report](#example-of-pg-collector-report)
-- [Modern viewer: traffic-light report](#modern-viewer-traffic-light-report)
 - [PG Collector output](#pg-collector-output)
 - [How to run PG Collector script](#how-to-run-pg-collector-script--pg_collectorsql-)
-- [Running against a production database (read-only)](#running-against-a-production-database-read-only)
+- [Running against production (read-only)](#running-against-production-read-only)
 - [Selective Section Execution](#selective-section-execution)
 - [PG Collector & AI](#pg-collector--ai)
 - [Notes](#notes)
@@ -39,6 +39,71 @@ With PG Collector an operator gains insights on various aspects of the database,
 * Unlogged Tables
 
 and more, please check the example reports 
+
+## What this fork adds
+
+A filterable viewer for the report, three new health-check sections, fixes for
+four upstream bugs, and a test suite (upstream has none).
+
+### The traffic-light report
+
+![Filtering a pg_collector report by critical, warning and notice, and searching sections](img/enhance_traffic_light.gif)
+
+[`tools/enhance.html`](tools/enhance.html) renders any `pg_collector_*.html` as
+a modern page. One static file: no Node, no npm, no build step, nothing
+uploaded, original report untouched.
+
+```bash
+xdg-open tools/enhance.html        # then drag your report onto the page
+```
+
+The lit lamp is the worst severity present. Click a lamp or a chip and the
+findings, the sidebar and the detail sections all filter to that severity;
+search composes with the filter. Rubric, section grouping and wording are
+config arrays at the top of the file - see [tools/README.md](tools/README.md).
+
+### The rest
+
+- **Runs clean on PostgreSQL 13-19.** Upstream ships one branch per major; this
+  one gates by `server_version_num` and by `pg_stat_statements` column
+  availability, so older servers get a smaller report instead of a broken one.
+  Zero errors on 13, 14, 15, 16, 17 and 19.
+- **Three new sections** - Collation / glibc index risk, Partitioning
+  candidates, Materialized view health. Detailed just below.
+- **Upstream fixes:** [#13](https://github.com/awslabs/pg-collector/issues/13)
+  (an `ORDER BY` costing 11 minutes),
+  [#10](https://github.com/awslabs/pg-collector/issues/10) (division by zero),
+  [#7](https://github.com/awslabs/pg-collector/issues/7) (insert-only tables
+  missing from autovacuum eligibility), plus `trunc(extract(...))` failing on
+  PG13.
+- **Tests:** 5 static linters plus a runtime harness, in CI across PG 17/18/19.
+  See [TESTING.md](TESTING.md).
+
+### Collation / glibc index risk
+
+Detects indexes left mis-ordered by an operating-system collation change - most
+commonly an in-place RHEL 7 (glibc 2.17) to RHEL 8+ (glibc 2.28) upgrade, where
+sort order changed for most locales. Affected text indexes silently return
+incomplete results, and affected UNIQUE indexes may already hold duplicates.
+
+<img src="img/collation_index_risk.png" alt="Collation / glibc index risk section">
+
+### Partitioning candidates
+
+Ranks unpartitioned tables by size alongside the signals that make declarative
+partitioning pay off: a usable range key, dead-row churn, bulk deletes and
+sequential-scan pressure. The size threshold defaults to 50 GB and is
+configurable with `-v part_min_gb=<n>`.
+
+<img src="img/partitioning_candidates.png" alt="Partitioning candidates section">
+
+### Materialized view health
+
+Reports which materialized views can be refreshed concurrently, the order they
+must be refreshed in when stacked on one another, staleness and bloat
+indicators, and indexes that only cost refresh time.
+
+<img src="img/materialized_views_health.png" alt="Materialized view health section">
 
 ## PG Collector's Automated Database Health check
 
@@ -78,109 +143,27 @@ Database Health check list :
 
 <img src="img/Observations_section.png" alt="">
 
-## Sample report
+## Sample reports
 
-Four full reports are checked in, one per PostgreSQL major, all generated
-against a database seeded with `tests/fixtures/` so they deliberately trigger
-most of the health checks listed above.
+Four full reports, one per major, seeded from `tests/fixtures/` so they trigger
+most of the health checks.
 
-![A checked-in sample report open in the viewer: expanding a section, sorting a table, the grouped DB parameters view, and the same viewer rendering the PG16, PG15 and PG14 reports](img/sample_report_viewer.gif)
+![A sample report open in the viewer: expanding a section, sorting a table, and the same viewer rendering the PG16, PG15 and PG14 reports](img/sample_report_viewer.gif)
 
-| Report | Generated with | Rendered |
-|---|---|---|
-| [`pg_collector_pg19_sample-2026-10-22.html`](sample_reports/pg_collector_pg19_sample-2026-10-22.html) | this branch's script | [view](https://htmlpreview.github.io/?https://github.com/tarunvignesh/pg-collector/blob/ui-modern-pg19/sample_reports/pg_collector_pg19_sample-2026-10-22.html) |
-| [`pg_collector_pg16_sample-2026-10-27.html`](sample_reports/pg_collector_pg16_sample-2026-10-27.html) | `pg-collector-for-postgresql-16` | [view](https://htmlpreview.github.io/?https://github.com/tarunvignesh/pg-collector/blob/ui-modern-pg19/sample_reports/pg_collector_pg16_sample-2026-10-27.html) |
-| [`pg_collector_pg15_sample-2026-10-27.html`](sample_reports/pg_collector_pg15_sample-2026-10-27.html) | `pg-collector-for-postgresql-15` | [view](https://htmlpreview.github.io/?https://github.com/tarunvignesh/pg-collector/blob/ui-modern-pg19/sample_reports/pg_collector_pg15_sample-2026-10-27.html) |
-| [`pg_collector_pg14_sample-2026-10-27.html`](sample_reports/pg_collector_pg14_sample-2026-10-27.html) | `pg-collector-for-postgresql-14` | [view](https://htmlpreview.github.io/?https://github.com/tarunvignesh/pg-collector/blob/ui-modern-pg19/sample_reports/pg_collector_pg14_sample-2026-10-27.html) |
+| Report | Rendered |
+|---|---|
+| [PG19](sample_reports/pg_collector_pg19_sample-2026-10-22.html) | [view](https://htmlpreview.github.io/?https://github.com/tarunvignesh/pg-collector/blob/ui-modern-pg19/sample_reports/pg_collector_pg19_sample-2026-10-22.html) |
+| [PG16](sample_reports/pg_collector_pg16_sample-2026-10-27.html) | [view](https://htmlpreview.github.io/?https://github.com/tarunvignesh/pg-collector/blob/ui-modern-pg19/sample_reports/pg_collector_pg16_sample-2026-10-27.html) |
+| [PG15](sample_reports/pg_collector_pg15_sample-2026-10-27.html) | [view](https://htmlpreview.github.io/?https://github.com/tarunvignesh/pg-collector/blob/ui-modern-pg19/sample_reports/pg_collector_pg15_sample-2026-10-27.html) |
+| [PG14](sample_reports/pg_collector_pg14_sample-2026-10-27.html) | [view](https://htmlpreview.github.io/?https://github.com/tarunvignesh/pg-collector/blob/ui-modern-pg19/sample_reports/pg_collector_pg14_sample-2026-10-27.html) |
 
-GitHub serves `.html` files from a repository as source text rather than
-rendering them, so the **Rendered** column goes through an HTML preview proxy.
-Downloading a file and opening it in a browser works too, as does dropping it
-onto [the viewer](#modern-viewer-traffic-light-report).
+GitHub serves `.html` as source, so the **Rendered** column goes through a
+preview proxy. Downloading one and dropping it on
+[the viewer](#the-traffic-light-report) works too - it renders any major's
+report.
 
-**Each report was generated by its own major's script, not by this one.**
-PG Collector ships one branch per PostgreSQL major, and that is not a
-formality: this branch's script queries catalog columns that do not exist
-further back, so running it against PG16 silently drops around fourteen
-queries (`parallel_workers_to_launch`, `wal_buffers_full`,
-`max_dead_tuple_bytes`, `datlocale`) and against PG14 closer to twenty, taking
-the collation and ICU checks with them. Run the branch that matches your
-server. The viewer does not care which one produced the report - it groups
-every section of all four into the same sidebar.
-
-### Collation / glibc index risk
-
-Detects indexes left mis-ordered by an operating-system collation change - most
-commonly an in-place RHEL 7 (glibc 2.17) to RHEL 8+ (glibc 2.28) upgrade, where
-sort order changed for most locales. Affected text indexes silently return
-incomplete results, and affected UNIQUE indexes may already hold duplicates.
-
-<img src="img/collation_index_risk.png" alt="Collation / glibc index risk section">
-
-### Partitioning candidates
-
-Ranks unpartitioned tables by size alongside the signals that make declarative
-partitioning pay off: a usable range key, dead-row churn, bulk deletes and
-sequential-scan pressure. The size threshold defaults to 50 GB and is
-configurable with `-v part_min_gb=<n>`.
-
-<img src="img/partitioning_candidates.png" alt="Partitioning candidates section">
-
-### Materialized view health
-
-Reports which materialized views can be refreshed concurrently, the order they
-must be refreshed in when stacked on one another, staleness and bloat
-indicators, and indexes that only cost refresh time.
-
-<img src="img/materialized_views_health.png" alt="Materialized view health section">
-
-## Modern viewer: traffic-light report
-
-[`tools/enhance.html`](tools/enhance.html) is a single static HTML file that
-renders any `pg_collector_*.html` report as a modern, filterable page. It reads
-the report in your browser - nothing is uploaded, and the original file is not
-modified. No Node, no Python, no npm, no CDN, no build step.
-
-![Traffic-light view of a pg_collector report: filtering by critical, warning and notice, and searching sections](img/enhance_traffic_light.gif)
-
-What it adds on top of the raw report:
-
-- **Traffic light verdict.** The lamp for the worst severity present is lit -
-  red for critical, amber for warning, blue for notice, green when nothing
-  fired - with a headline that says what to do about it (*Action required*,
-  *Needs attention*, *Minor notices only*, *All clear*) rather than a row of
-  numbers you have to rank yourself.
-- **Severity filtering.** Click a lamp or a chip and the whole report narrows
-  to that severity: the findings, the sidebar, and the detail sections. Click
-  it again, or *All findings*, to clear.
-- **Full-text search** across every section, which composes with the active
-  severity filter.
-- **Severity rubric.** Every classification is an opinion of the viewer, not of
-  the script; the sidebar links to the full rubric with the reasoning for each
-  check, and the rubric is a plain array you can edit.
-- **Grouped sidebar** with scroll-spy, **sortable tables** with numeric columns
-  right-aligned, size-column bar charts, a `pgtune`-style view of
-  `DB parameters`, and light / dark / auto themes.
-
-Open it and drag a report onto the page:
-
-```bash
-xdg-open tools/enhance.html      # or just double-click the file
-```
-
-The `?report=URL` query parameter auto-loads a report instead, which needs any
-static HTTP server because browsers block cross-origin `file://` fetches:
-
-```bash
-python3 -m http.server 8770
-# then visit:
-# http://127.0.0.1:8770/tools/enhance.html?report=/sample_reports/pg_collector_pg19_sample-2026-10-22.html
-```
-
-Severity classification, section grouping, wording and initial state are all
-config arrays at the top of the file - see [tools/README.md](tools/README.md)
-for worked examples, and [tools/CUSTOMIZING.md](tools/CUSTOMIZING.md) for
-making a newly added report section render well in it.
+The PG14/15/16 samples were generated with their own branch's script. That is
+no longer a requirement: this branch now runs clean on PG13-19.
 
 ## PG Collector report header 
 <img src="img/pg_collector_header_V2.6.png" alt="">
@@ -271,140 +254,47 @@ mohamed@mydevhost ~ %ls -lhrt /tmp/pg_collector_*
 5-  open the report using any internet browser
 
 
-## Running against a production database (read-only)
+## Running against production (read-only)
 
-PG Collector only reads. The script issues no `INSERT`, `UPDATE`, `DELETE`,
-`CREATE`, `ALTER`, `DROP`, `GRANT`, `VACUUM` or `ANALYZE`; it creates no tables,
-no functions and no extensions, and it calls no side-effecting server function.
-The single change it makes to anything is `SET statement_timeout = '5min'` on
-its own session, which lasts only as long as that connection.
+PG Collector only reads: no write statement anywhere, no objects created, and
+`SET statement_timeout` is the only change it makes to its session.
+`tests/lint/check_safety.py` fails the build if that stops being true.
 
-That is checked, not asserted. `tests/lint/check_safety.py` tokenizes the
-script and fails the build if any one of its 597 statements is write-class, and
-the runtime harness additionally runs the whole thing as an unprivileged role
-and diffs every non-catalog relation before and after.
-
-Being read-only by construction and being *prevented* from writing are still
-different guarantees, though, and on a production database you may want the
-second one. Both options below were verified against PostgreSQL 19 to produce a
-report identical to a superuser run - same 50 sections, same 220 tables, zero
-errors.
-
-### Option 1: enforce read-only on the connection
-
-**There is no `--read-only` switch in psql** - the flag does not exist. What
-does exist is a libpq connection parameter, `options`, which hands a server
-setting to the backend at connect time. Put it in the connection string and the
-whole thing stays on one command line:
+psql has **no `--read-only` switch** - the flag does not exist. To have the
+server enforce it, pass the setting on the connection:
 
 ```bash
-psql "host=[host] port=[port] dbname=[dbname] user=[user] \
-      options='-c default_transaction_read_only=on'" \
+psql "host=[host] dbname=[db] user=[user] options='-c default_transaction_read_only=on'" \
      -f pg_collector.sql
 ```
 
-The same setting via the environment, if you prefer flags to a connection
-string:
-
-```bash
-PGOPTIONS="-c default_transaction_read_only=on" \
-    psql -h [host] -p [port] -d [dbname] -U [user] -f pg_collector.sql
-```
-
-Or set it as the first thing the session does, which works because psql runs
-`-c` and `-f` in the order given, on one connection:
-
-```bash
-psql -h [host] -p [port] -d [dbname] -U [user] \
-     -c "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY" \
-     -f pg_collector.sql
-```
-
-All three were verified on PostgreSQL 19 to reject every write class:
-
-```
-ERROR:  cannot execute INSERT in a read-only transaction
-ERROR:  cannot execute UPDATE in a read-only transaction
-ERROR:  cannot execute DELETE in a read-only transaction
-ERROR:  cannot execute TRUNCATE TABLE in a read-only transaction
-ERROR:  cannot execute CREATE TABLE in a read-only transaction
-```
-
-**Know what this does and does not buy you.**
-`default_transaction_read_only` has `USERSET` context, which means any session
-can turn it back off:
-
-```sql
-SET default_transaction_read_only = off;   -- succeeds, for any role
-INSERT INTO ...                            -- now writes
-```
-
-So it is a guardrail against accidents, not a security boundary. It is a sound
-guardrail *for this script specifically*, because the script cannot quietly
-escape it: `tests/lint/check_safety.py` allowlists only `statement_timeout`,
-`lock_timeout` and `idle_in_transaction_session_timeout`, so a
-`SET default_transaction_read_only = off` anywhere in `pg_collector.sql` fails
-the build. If you want a guarantee that does not depend on the script being
-honest, use Option 2 - privileges cannot be switched off with `SET`.
-
-### Option 2: a dedicated read-only role
-
-Better for anything recurring, because the guarantee lives with the role rather
-than with whoever remembers the environment variable:
+That rejects `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE` and `CREATE`. It is a
+guardrail, not a boundary: `default_transaction_read_only` is `USERSET`, so any
+session can `SET` it back off. For a boundary that cannot be switched off, use
+a role without write privileges:
 
 ```sql
 CREATE ROLE pgc_readonly LOGIN PASSWORD '...';
-GRANT CONNECT ON DATABASE [dbname] TO pgc_readonly;
+GRANT CONNECT ON DATABASE [db] TO pgc_readonly;
 GRANT USAGE ON SCHEMA public TO pgc_readonly;
-
--- Predefined read-only roles. These exist from PostgreSQL 10.
 GRANT pg_read_all_stats, pg_read_all_settings, pg_monitor TO pgc_readonly;
-
--- PostgreSQL 14 and later only. On 13 and earlier, grant SELECT per schema:
---   GRANT SELECT ON ALL TABLES IN SCHEMA [schema] TO pgc_readonly;
---   GRANT SELECT ON ALL SEQUENCES IN SCHEMA [schema] TO pgc_readonly;
-GRANT pg_read_all_data TO pgc_readonly;
-
--- Two objects default to superuser-only and are read-only; without these the
--- pg_config and pg_hba.conf sections come back empty rather than erroring.
+GRANT pg_read_all_data TO pgc_readonly;          -- PG14+
 GRANT EXECUTE ON FUNCTION pg_config() TO pgc_readonly;
 GRANT EXECUTE ON FUNCTION pg_hba_file_rules() TO pgc_readonly;
-GRANT SELECT ON pg_hba_file_rules TO pgc_readonly;   -- PG13 needs the view too
-
--- Belt and braces: every transaction this role opens is read-only.
+GRANT SELECT ON pg_hba_file_rules TO pgc_readonly;
 ALTER ROLE pgc_readonly SET default_transaction_read_only = on;
 ```
 
-Then run as that role:
+Verified on PG19 to produce a report identical to a superuser run. The last
+three grants cover objects that default to superuser-only; without them those
+sections come back empty rather than erroring.
 
-```bash
-psql -h [host] -p [port] -d [dbname] -U pgc_readonly -f pg_collector.sql
-```
+**Before PG14** there is no `pg_read_all_data`, so grant `SELECT` per schema -
+and include sequences. `pg_sequences.last_value` returns `NULL` rather than
+erroring for a sequence the role cannot read, which silently turns the
+"sequence approaching its maximum" check into a pass.
 
-To confirm the session really is read-only:
-
-```
-=> show default_transaction_read_only;
- on
-=> create table should_fail(i int);
-ERROR:  cannot execute CREATE TABLE in a read-only transaction
-```
-
-### Note on sequences before PostgreSQL 14
-
-`pg_sequences.last_value` returns `NULL`, not an error, for a sequence the
-caller cannot `SELECT`. On PG13 and earlier - where there is no
-`pg_read_all_data` to cover it - a role missing sequence privileges makes the
-"sequence approaching its maximum" check report *OK* rather than failing
-loudly. Grant `SELECT ON ALL SEQUENCES` if you want that check to be
-trustworthy.
-
-### Running against a standby
-
-A hot standby is read-only by definition and is a good place to run this. The
-report notes the server's role (Primary or Standby) in its header. Some
-sections read cluster-wide write activity that is quieter on a replica, so
-prefer the primary when you are diagnosing write-path problems.
+A hot standby is read-only by definition and is a fine place to run this.
 
 ## Selective Section Execution 
 

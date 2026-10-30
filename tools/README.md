@@ -266,15 +266,20 @@ for the viewer (yet). If you add one, drop it in
 
 #### Regenerating the README GIF
 
-Both GIFs in the root README -- `img/enhance_traffic_light.gif` and
-`img/sample_report_viewer.gif` -- are driven by `tools/gif-capture.html`,
+The GIFs in the root README -- `img/run_and_view.gif`,
+`img/sample_report_viewer.gif` and `img/enhance_traffic_light.gif` (the
+filtering-only cut, kept for reference) -- are driven by `tools/gif-capture.html`,
 a maintainer-only harness that loads the viewer in an iframe and replays
 a fixed storyboard. Frame N replays actions 1..N from a cold load, so
 frames never depend on capture timing. The full chromium + ffmpeg recipe
 is in a comment at the top of that file.
 
 It takes three query parameters: `step` (which frame), `story`
-(`traffic` or `sample`), and `r` (which report to load). The sample
+(`traffic`, `sample` or `endtoend`), and `r` (which report to load). The
+`endtoend` story opens with a terminal overlay whose text is a verbatim
+capture of a real run against `postgres:19beta3` -- stored in the `TERMINAL`
+array, re-capture it rather than editing it by hand -- then hands over to the
+viewer. The sample
 story's last frames are captured against the PG16, PG15 and PG14 reports
 in turn, which is how one GIF shows the viewer handling every major.
 Edit the `TRAFFIC` or `SAMPLE` array to change what is demonstrated.

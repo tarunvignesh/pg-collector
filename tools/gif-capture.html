@@ -23,6 +23,19 @@
 <style>
   html,body{margin:0;height:100%;background:#0a1018}
   iframe{border:0;width:100vw;height:100vh;display:block}
+  /* Terminal overlay, used by the end-to-end story. The text it shows is a
+     verbatim capture of a real run against postgres:19beta3 -- see TERMINAL
+     below -- not a mock-up. */
+  #term{
+    position:fixed; inset:0; background:#0b0f16; padding:3.2rem 3.5rem;
+    font:15px/1.65 ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    color:#cfd8e3; white-space:pre-wrap; overflow:hidden;
+  }
+  #term .prompt{color:#6fa8d6}
+  #term .cmd{color:#e8edf4}
+  #term .ok{color:#6fcc8e}
+  #term .path{color:#f4cc55}
+  #term .cursor{background:#cfd8e3; color:#0b0f16}
   #cap{
     position:fixed; left:50%; bottom:18px; transform:translateX(-50%);
     background:rgba(10,14,22,.93); color:#e8edf4; border:1px solid rgba(255,255,255,.14);
@@ -31,6 +44,7 @@
   }
 </style>
 <iframe id="f"></iframe>
+<div id="term" hidden><div id="term-body"></div></div>
 <div id="cap"></div>
 <script>
 const q = new URLSearchParams(location.search);
@@ -101,7 +115,64 @@ const SAMPLE = [
    cap: 'The same viewer renders every major\'s report'},
 ];
 
-const STORY = which === 'sample' ? SAMPLE : TRAFFIC;
+// Verbatim stdout of
+//   psql -h localhost -d proddb -U postgres -f pg_collector.sql
+// against postgres:19beta3 with the tests/fixtures/ seed, default outdir.
+const TERMINAL = [
+  'SET',
+  'statement_timeout set to 5 minutes. To change, edit the SET statement_timeout line in the script.',
+  'Output format is html.',
+  'Generating all sections in the Report',
+  'Output format is aligned.',
+  'Query buffer reset (cleared).',
+  'Report Generated Successfully',
+  'Report name and location: /tmp/pg_collector_proddb-2026-10-29_214855.html',
+];
+
+function term(linesShown, {done = false, typed = null} = {}) {
+  const t = document.getElementById('term');
+  const body = document.getElementById('term-body');
+  t.hidden = false;
+  const cmd = 'psql -h localhost -d proddb -U postgres -f pg_collector.sql';
+  const shown = typed === null ? cmd : cmd.slice(0, typed);
+  let html = '<span class="prompt">$</span> <span class="cmd">' + shown + '</span>';
+  if (typed !== null) html += '<span class="cursor"> </span>';
+  html += '\n';
+  for (let i = 0; i < linesShown; i++) {
+    const line = TERMINAL[i];
+    if (line.startsWith('Report Generated')) html += '<span class="ok">' + line + '</span>\n';
+    else if (line.startsWith('Report name')) html += 'Report name and location: <span class="path">/tmp/pg_collector_proddb-2026-10-29_214855.html</span>\n';
+    else html += line + '\n';
+  }
+  if (done) html += '<span class="prompt">$</span> <span class="cmd">xdg-open tools/enhance.html</span><span class="cursor"> </span>';
+  body.innerHTML = html;
+}
+
+function hideTerm() { document.getElementById('term').hidden = true; }
+
+// End to end: run the script, then look at the report.
+const ENDTOEND = [
+  {act: () => term(0, {typed: 22}),
+   cap: 'One psql script, nothing installed on the server'},
+  {act: () => term(0, {}),
+   cap: 'Read-only: no objects created, no writes'},
+  {act: () => term(6, {}),
+   cap: 'Collecting…'},
+  {act: () => term(8, {}),
+   cap: 'A self-contained HTML report in /tmp'},
+  {act: () => term(8, {done: true}),
+   cap: 'Now open it in the viewer'},
+  {act: d => { hideTerm(); },
+   cap: 'The traffic light is the verdict: red, 3 critical'},
+  {act: d => d.querySelector('.chip[data-sev="crit"]').click(),
+   cap: 'Click a lamp or a chip to filter the whole report'},
+  {act: d => d.querySelector('.chip[data-sev="all"]').click(),
+   cap: 'tools/enhance.html — one static file, nothing uploaded'},
+];
+
+const STORY = which === 'sample' ? SAMPLE
+            : which === 'endtoend' ? ENDTOEND
+            : TRAFFIC;
 
 let tries = 0;
 function go() {

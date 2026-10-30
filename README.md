@@ -47,15 +47,18 @@ four upstream bugs, and a test suite (upstream has none).
 
 ### The traffic-light report
 
-![Filtering a pg_collector report by critical, warning and notice, and searching sections](img/enhance_traffic_light.gif)
+Run the script, open the report, read the verdict:
+
+![Running pg_collector.sql with psql, then opening the generated report in the viewer and filtering it to the critical findings](img/run_and_view.gif)
+
+```bash
+psql -h [host] -d [db] -U [user] -f pg_collector.sql   # writes /tmp/pg_collector_<db>-<ts>.html
+xdg-open tools/enhance.html                            # then drag that file onto the page
+```
 
 [`tools/enhance.html`](tools/enhance.html) renders any `pg_collector_*.html` as
 a modern page. One static file: no Node, no npm, no build step, nothing
 uploaded, original report untouched.
-
-```bash
-xdg-open tools/enhance.html        # then drag your report onto the page
-```
 
 The lit lamp is the worst severity present. Click a lamp or a chip and the
 findings, the sidebar and the detail sections all filter to that severity;

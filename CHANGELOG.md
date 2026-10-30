@@ -74,6 +74,21 @@ All notable changes to pg collector will be documented in this file.
     cache scan, and the Aurora Limitless single-shard call ratio.
     tests/lint/check_div_by_zero.py now fails the build on any new occurrence.
 
+16- The Collation / glibc index risk section now carries evidence of when each
+    index was last rebuilt, because a mismatch does not mean an index is still
+    affected: PostgreSQL records the collation version on the collation, not on
+    each index, so REINDEX does not clear the flag and an index already rebuilt
+    with the new library keeps being listed. There is no catalog column holding
+    a rebuild time, so two proxies are reported. index_filenode changes on
+    REINDEX and does not change when rows are written, so a filenode higher
+    than its neighbours marks a more recent rebuild. index_file_mtime is the
+    file's modification time, which ordinary writes also bump - conclusive only
+    in the negative, where an mtime predating the OS change proves the index
+    has not been rebuilt since. The mtime column is gated on
+    has_function_privilege for pg_stat_file, which is owner-only by default and
+    is NOT conferred by pg_read_server_files, so a least-privilege role gets
+    the filenode column and no permission error.
+
 15- The Collation / glibc index risk section now names the indexes to rebuild
     and emits the statement that rebuilds each one, rather than leaving the
     reader to work out which objects a version mismatch applies to. Both the

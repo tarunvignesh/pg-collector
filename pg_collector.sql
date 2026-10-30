@@ -185,6 +185,20 @@ WHERE c.relname = 'pg_stat_statements' \gset
 \else
 \set pgss_walbuffers_col ''
 \endif
+
+-- pg_stat_file() is owner-only by default: its ACL is {postgres=X/postgres},
+-- and membership in pg_read_server_files does NOT confer EXECUTE on it, which
+-- is the obvious guess and is wrong. Ask the only question that settles it.
+-- pg_relation_filepath() needs no such privilege, so the filenode column below
+-- is always available.
+SELECT has_function_privilege(current_user,
+         'pg_catalog.pg_stat_file(text)', 'EXECUTE') AS v_statfile \gset
+
+\if :v_statfile
+\set idx_mtime_col ', (pg_stat_file(pg_relation_filepath(ic.oid))).modification AS index_file_mtime'
+\else
+\set idx_mtime_col ''
+\endif
 -- Resolve fullmod: default 't' (full mode) if not passed
 \set fullmod :fullmod
 SELECT CASE WHEN :'fullmod' = ':fullmod' THEN 't' ELSE :'fullmod' END AS "fullmod" \gset
@@ -5860,6 +5874,9 @@ SELECT n.nspname                                          AS schema,
             WHEN d.indisunique  THEN 'UNIQUE'
             ELSE 'index' END                              AS index_kind,
        pg_size_pretty(pg_relation_size(d.indexrelid))     AS index_size,
+       ic.relfilenode                                     AS index_filenode
+       :idx_mtime_col
+       ,
        'REINDEX INDEX CONCURRENTLY ' ||
          quote_ident(n.nspname) || '.' || quote_ident(ic.relname) || ';'
                                                           AS rebuild_with,
@@ -5875,6 +5892,8 @@ LIMIT 200;
 \qecho <br>
 \qecho <h3>Indexes requiring REINDEX (largest 200):</h3>
 \qecho <h4>Note: PRIMARY KEY and UNIQUE entries are the most urgent - a broken ordering means the uniqueness guarantee was not enforced while the mismatch existed, so duplicates may already be present.</h4>
+\qecho <h4>Already rebuilt some of these? PostgreSQL records the collation version on the collation, not on each index, so REINDEX does not clear the mismatch and an index you have already rebuilt keeps appearing here. There is no catalog column holding when an index was last rebuilt, so two proxies are given instead. index_filenode changes when an index is rebuilt and does not change when rows are written, so a filenode higher than its neighbours means that index was rebuilt more recently. index_file_mtime is the file's modification time, which ordinary writes also bump - it is only conclusive in the negative: an mtime older than the operating system change means the index certainly has not been rebuilt since.</h4>
+\qecho <h4>Once everything here is rebuilt, run ALTER COLLATION &lt;name&gt; REFRESH VERSION (and ALTER DATABASE &lt;db&gt; REFRESH COLLATION VERSION) so this section stops reporting work that is already done.</h4>
 \qecho <br>
 \if :v_dbcollversion
 WITH defcoll AS (
@@ -5912,6 +5931,9 @@ SELECT DISTINCT
        coalesce(cs.recorded_version, db.recorded_version) AS recorded_version,
        coalesce(cs.os_version, db.os_version)           AS os_version,
        pg_size_pretty(pg_relation_size(i.indexrelid))   AS index_size,
+       ic.relfilenode                                   AS index_filenode
+       :idx_mtime_col
+       ,
        'REINDEX INDEX CONCURRENTLY ' ||
          quote_ident(n.nspname) || '.' || quote_ident(ic.relname) || ';'
                                                         AS rebuild_with,
@@ -5952,6 +5974,9 @@ SELECT DISTINCT
        cs.recorded_version                              AS recorded_version,
        cs.os_version                                    AS os_version,
        pg_size_pretty(pg_relation_size(i.indexrelid))   AS index_size,
+       ic.relfilenode                                   AS index_filenode
+       :idx_mtime_col
+       ,
        'REINDEX INDEX CONCURRENTLY ' ||
          quote_ident(n.nspname) || '.' || quote_ident(ic.relname) || ';'
                                                         AS rebuild_with,

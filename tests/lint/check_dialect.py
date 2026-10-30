@@ -181,6 +181,7 @@ FRAGMENT_VARS = {
     "pgss_tempblk_read":  ("", ", temp_blk_read_time"),
     "pgss_walbuffers_col": ("", ", wal_buffers_full"),
     "qid":                ("query_id", "NULL::bigint AS query_id"),
+    "idx_mtime_col":      ("", ", (pg_stat_file(pg_relation_filepath(ic.oid))).modification AS index_file_mtime"),
 }
 
 FRAGMENT_RE = re.compile(

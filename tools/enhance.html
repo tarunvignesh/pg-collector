@@ -418,6 +418,26 @@
   /* selected as the active filter */
   .tl-lamp[aria-pressed=true] { outline: 2px solid var(--text); outline-offset: 3px; }
 
+  /* Per-section SQL source */
+  .sql-src { margin: .9rem 0 .2rem; border: 1px solid var(--border);
+             border-radius: var(--radius-sm); background: var(--surface-2); }
+  .sql-src > summary {
+    cursor: pointer; padding: .5rem .8rem; font-size: .8rem; font-weight: 500;
+    color: var(--muted); list-style: none; display: flex; align-items: center; gap: .5rem;
+  }
+  .sql-src > summary::-webkit-details-marker { display: none; }
+  .sql-src > summary::before { content: '›'; transition: transform .2s ease; }
+  .sql-src[open] > summary::before { transform: rotate(90deg); }
+  .sql-src > summary:hover { color: var(--text); }
+  .sql-src pre {
+    margin: 0; padding: .8rem 1rem; overflow-x: auto; background: var(--surface);
+    border-top: 1px solid var(--border);
+    border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+    font: 12px/1.55 ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    color: var(--text); white-space: pre;
+  }
+  .sql-hint { font-size: .72rem; color: var(--muted); padding: 0 1rem .7rem; }
+
   /* Filter chips — mirror the lamps, with counts and labels */
   .filters { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
              margin: 0 0 1.15rem; }
@@ -772,7 +792,7 @@
     <h1 id="dz-title">pg_collector — modern view</h1>
     <p id="dz-blurb">Drop a <code>pg_collector_*.html</code> file here</p>
     <p class="mono" style="font-size:.8rem">— or —</p>
-    <input type="file" id="filepick" accept=".html,text/html">
+    <input type="file" id="filepick" accept=".html,text/html,.sql" multiple>
     <label for="filepick" class="btn" id="dz-btn">Choose file</label>
     <p class="hint" id="dz-hint">
       Reads the report locally in your browser. Nothing is uploaded.<br>
@@ -1044,7 +1064,7 @@ const LABELS = {
   dropzoneTitle: 'pg_collector — modern view',
   dropzoneBlurb: 'Drop a <code>pg_collector_*.html</code> file here',
   dropzoneBtn: 'Choose file',
-  dropzoneHint: 'Reads the report locally in your browser. Nothing is uploaded.<br>Original report is not modified.',
+  dropzoneHint: 'Reads the report locally in your browser. Nothing is uploaded.<br>Original report is not modified.<br>Drop <code>pg_collector.sql</code> in too to see the SQL behind each section.',
   searchPlaceholder: 'Filter sections…',
   databaseOverview: 'Database overview',
   detailSections: 'Detail sections',
@@ -1068,6 +1088,9 @@ const LABELS = {
   },
   // Severity filter. {n} / {sev} / {findings} / {sections} are substituted.
   trafficLight: 'Report status',
+  sqlSummary: 'Show the SQL behind this section',
+  sqlHint: 'Extracted from the pg_collector.sql you loaded, between this section\'s anchor and the next.',
+  scriptPrompt: 'Drop <code>pg_collector.sql</code> in as well to see the query behind each section.',
   filterAll: 'All findings',
   filterHint: 'Click a lamp or a chip to filter the report.',
   filterNote: 'Filtered to {sev}: {findings} findings in {sections} of {total} sections.',
@@ -1087,6 +1110,9 @@ const DEFAULTS = {
   expandedBlocks: ['crit', 'warn'],
   // Severity the report opens filtered to: 'crit' | 'warn' | 'note' | null (all)
   initialFilter: null,
+  // Show a "Show the SQL" disclosure per section when pg_collector.sql is
+  // loaded alongside the report.
+  showSectionSql: true,
   // Hide sections whose only content is "no X found" placeholder text
   hideEmptySections: true,
   // Initial theme: 'auto' | 'light' | 'dark' | (any custom theme name)
@@ -1112,6 +1138,46 @@ function parseReport(html) {
     if (s.anchor === 'DB_parameters') s.params = parseParamsTable(s);
   }
   return { title, dbInfo, observations, sections };
+}
+
+/* Split pg_collector.sql into the SQL that produced each report section.
+ *
+ * The script marks every section with `\qecho <a name="X"></a>`, the same
+ * anchor the report carries, so the text between one anchor and the next is
+ * that section's source. Psql meta-commands are dropped -- they are the
+ * script's control flow and its HTML scaffolding, not the query anyone wants
+ * to read -- while SQL comments are kept, because they are frequently the
+ * only explanation a query has.
+ *
+ * Deliberately text-level: no attempt to resolve \if branches or interpolate
+ * psql variables. A reader wants to see what the script contains, and guessing
+ * which branch ran would be a worse answer than showing both.
+ */
+function parseScript(sqlText) {
+  const lines = sqlText.split('\n');
+  const anchors = [];
+  const anchorRe = /\\qecho\s*<a name="([^"]+)"/;
+  lines.forEach((ln, i) => {
+    const m = ln.match(anchorRe);
+    if (m && m[1] !== 'top') anchors.push({ name: m[1], line: i });
+  });
+
+  const out = new Map();
+  for (let k = 0; k < anchors.length; k++) {
+    const from = anchors[k].line + 1;
+    const to = k + 1 < anchors.length ? anchors[k + 1].line : lines.length;
+    const body = [];
+    for (const raw of lines.slice(from, to)) {
+      const t = raw.trim();
+      if (t.startsWith('\\')) continue;            // psql meta-command
+      if (t.startsWith('-- +---') || /^-- \|/.test(t)) continue;  // box banners
+      body.push(raw.replace(/\s+$/, ''));
+    }
+    // Collapse runs of blank lines left behind by the stripped meta-commands.
+    const text = body.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    if (text) out.set(anchors[k].name, text);
+  }
+  return out;
 }
 
 /* Extract { name, setting, unit, category, short_desc, source, ... } records
@@ -1670,6 +1736,21 @@ function renderSectionDetail(s, issues) {
   `;
   // Section-specific post-processing
   const body = det.querySelector('.section-body');
+  // The SQL that produced this section, when pg_collector.sql was loaded too.
+  if (DEFAULTS.showSectionSql && window.pgcScript) {
+    const sql = window.pgcScript.get(s.anchor);
+    if (sql) {
+      const d = document.createElement('details');
+      d.className = 'sql-src';
+      d.innerHTML = `<summary>${escapeHtml(LABELS.sqlSummary)}</summary>` +
+                    `<pre><code></code></pre>` +
+                    `<div class="sql-hint">${escapeHtml(LABELS.sqlHint)}</div>`;
+      // textContent, not innerHTML: the script is a local file the user chose,
+      // but it is still untrusted input being put on a page.
+      d.querySelector('code').textContent = sql;
+      body.appendChild(d);
+    }
+  }
   if (s.anchor === 'DB_parameters' && Array.isArray(s.params) && s.params.length) {
     decorateDbParams(body, s.params);
   }
@@ -2414,6 +2495,32 @@ const dropzone = document.getElementById('dropzone');
 const filepick = document.getElementById('filepick');
 const errEl = document.getElementById('err');
 
+/* Accepts the report, optionally with pg_collector.sql alongside it. Order
+ * does not matter: the .sql is read first so the script map exists before the
+ * report renders. */
+function loadFiles(fileList) {
+  const files = [...(fileList || [])];
+  if (files.length === 0) return;
+  const script = files.find(f => /\.sql$/i.test(f.name));
+  const report = files.find(f => !/\.sql$/i.test(f.name)) ||
+                 (script ? null : files[0]);
+  if (!report) {
+    errEl.textContent = 'That is the script, not a report. Add a ' +
+                        'pg_collector_*.html file as well.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  if (!script) return loadFile(report);
+  const sr = new FileReader();
+  sr.onload = () => {
+    try { window.pgcScript = parseScript(sr.result); }
+    catch (e) { console.warn('could not parse script:', e); }
+    loadFile(report);
+  };
+  sr.onerror = () => loadFile(report);
+  sr.readAsText(script);
+}
+
 function loadFile(file) {
   errEl.classList.add('hidden');
   if (!file) return;
@@ -2438,14 +2545,14 @@ function loadFile(file) {
   r.readAsText(file);
 }
 
-filepick.addEventListener('change', e => loadFile(e.target.files[0]));
+filepick.addEventListener('change', e => loadFiles(e.target.files));
 ['dragenter','dragover'].forEach(ev =>
   dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.add('dragover'); })
 );
 ['dragleave','drop'].forEach(ev =>
   dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.remove('dragover'); })
 );
-dropzone.addEventListener('drop', e => loadFile(e.dataTransfer.files && e.dataTransfer.files[0]));
+dropzone.addEventListener('drop', e => loadFiles(e.dataTransfer.files));
 
 // Apply labels to static markup, then bootstrap
 applyLabels();
@@ -2461,6 +2568,16 @@ applyInitialTheme();
                         'Use a relative path or a same-origin URL.';
     errEl.classList.remove('hidden');
     return;
+  }
+  // Optional &script=<url> loads pg_collector.sql too, same origin rules.
+  const scriptUrl = new URLSearchParams(location.search).get('script');
+  if (scriptUrl && isSafeReportUrl(scriptUrl)) {
+    try {
+      const sr = await fetch(scriptUrl);
+      if (sr.ok) window.pgcScript = parseScript(await sr.text());
+    } catch (e) {
+      console.warn('could not load ?script=' + scriptUrl + ':', e);
+    }
   }
   try {
     const r = await fetch(url);

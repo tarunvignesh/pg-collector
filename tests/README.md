@@ -44,6 +44,27 @@ python tests/lint/check_dialect.py   pg_collector.sql
 python tests/lint/check_div_by_zero.py pg_collector.sql
 ```
 
+### Across several majors at once
+
+`tests/ladder.sh` runs the harness against a list of servers and prints one
+table. It starts no containers and installs nothing -- point it at servers you
+already have:
+
+```bash
+PGHOST=localhost PGUSER=postgres ./tests/ladder.sh 5433 5434 5435 5432
+```
+
+```
+TARGET                 VERSION  RESULT  ERRORS  SECTIONS NOTE
+port 5433              13.23    PASS    0       50
+port 5432              19beta3  PASS    0       50
+```
+
+A bare number is a port; anything else is treated as conninfo
+(`"host=db2 port=5432"`). Flags after `--` are passed to `run.sh`. Exits
+non-zero if any leg fails, so it works in a pre-push hook. Use it when you are
+changing a version gate and do not want to wait for CI.
+
 ### Runtime tests — BYOD (bring your own database)
 
 Locally, point `run.sh` at any Postgres you have. The recommended

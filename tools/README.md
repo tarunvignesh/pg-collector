@@ -17,6 +17,11 @@ it renders a modern UI on top of the existing report DOM:
   empty sockets stay dark — so the verdict lands before any number does
 - One-click severity filter: click a lamp (or a chip) and the findings,
   the sidebar and the detail sections all collapse to that severity
+- Show the SQL behind any section: load `pg_collector.sql` alongside the
+  report (drop both on the page, or pass `&script=`) and each section gains a
+  disclosure holding the script text between that section's anchor and the
+  next, psql meta-commands stripped and SQL comments kept. Nothing is
+  pre-baked, so it stays correct across branches and PG majors
 - Severity-grouped findings with rationale tooltips
 - Sticky sidebar with section grouping, search, and scroll-spy
 - Restyled tables, dark/light/auto theme, in-browser only (no upload)

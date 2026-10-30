@@ -65,6 +65,10 @@ findings, the sidebar and the detail sections all filter to that severity;
 search composes with the filter. Rubric, section grouping and wording are
 config arrays at the top of the file - see [tools/README.md](tools/README.md).
 
+Drop `pg_collector.sql` in alongside the report and every section grows a
+**Show the SQL behind this section** disclosure, extracted from the script you
+loaded. No report ever has to explain where a number came from again.
+
 ### The rest
 
 - **Runs clean on PostgreSQL 13-19.** Upstream ships one branch per major; this

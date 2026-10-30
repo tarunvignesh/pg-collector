@@ -76,7 +76,7 @@ config arrays at the top of the file - see [tools/README.md](tools/README.md).
   [#7](https://github.com/awslabs/pg-collector/issues/7) (insert-only tables
   missing from autovacuum eligibility), plus `trunc(extract(...))` failing on
   PG13.
-- **Tests:** 5 static linters plus a runtime harness, in CI across PG 17/18/19.
+- **Tests:** 5 static linters plus a runtime harness, in CI across PG 13-19.
   See [TESTING.md](TESTING.md).
 
 ### Collation / glibc index risk
@@ -543,8 +543,9 @@ PGHOST=localhost PGUSER=postgres \
     ./tests/run.sh --isolate --seed populated --with-pgss --with-aurora-mock
 ```
 
-CI runs the same harness in a GitHub Actions matrix (PG 17 / 18 / 19beta3 ×
-pgss on/off × seed empty/populated × aurora none/mocked).
+CI runs the same harness in a GitHub Actions matrix: PG 17 / 18 / 19beta3 ×
+pgss on/off × seed empty/populated × aurora none/mocked, plus one leg each on
+PG 13 / 14 / 15 / 16 so the version gates stay verified.
 
 - [TESTING.md](TESTING.md) — what each test proves, in plain English.
 - [tests/README.md](tests/README.md) — running locally, flag reference,

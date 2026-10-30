@@ -92,19 +92,26 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # This branch targets PG19 per the per-major branching policy, so
-        # 19beta3 (no GA tag on Docker Hub yet) is the merge-blocking entry
-        # and 17/18 guard the version gates that must still degrade cleanly
-        # on the majors immediately below. Older majors are dropped: the
-        # PG19 script reads catalog columns introduced in PG15-18
-        # (pg_parameter_acl, wal_buffers_full, parallel_workers_to_launch,
-        # generic_plan_calls) and only the gates keep those off PG12-14 —
-        # which is what the pg17/pg18 legs already exercise.
-        # See tests/DESIGN.md.
+        # 19beta3 (no GA tag on Docker Hub yet) is the merge-blocking entry;
+        # 17 and 18 get the full combination matrix with it.
+        #
+        # 13 through 16 get one leg each, below. The README claims this script
+        # runs clean on PG13-19, and a claim nothing re-checks is a claim that
+        # quietly stops being true -- the script reads catalog objects added in
+        # PG14 through PG18 (pg_stat_wal, pg_parameter_acl, wal_buffers_full,
+        # parallel_workers_to_launch) and only the version gates keep those off
+        # older servers. One leg each is enough: the gates are what is under
+        # test, and seed=populated with pgss on is the combination that reaches
+        # them. See tests/DESIGN.md.
         pg_major: ["17", "18", "19beta3"]
         pgss: [on, off]
         seed: [empty, populated]
         aurora: [none, mocked]
+        include:
+          - { pg_major: "16", pgss: on, seed: populated, aurora: none }
+          - { pg_major: "15", pgss: on, seed: populated, aurora: none }
+          - { pg_major: "14", pgss: on, seed: populated, aurora: none }
+          - { pg_major: "13", pgss: on, seed: populated, aurora: none }
 
     services:
       postgres:

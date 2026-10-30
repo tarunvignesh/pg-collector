@@ -184,23 +184,33 @@ The repo follows a branch-per-major model: `main` targets PG12 and
 older; each `pg_major: 13+` has its own branch. Each branch carries
 the version-specific catalog/syntax workarounds.
 
-**This branch targets PG19**, so its CI matrix runs the runtime harness
-against **17, 18 and 19beta3** (3 majors × pgss on/off × seed
-empty/populated × aurora none/mocked = 24 cells). PG19 has no GA tag on
-Docker Hub yet, hence `19beta3`.
+**This branch targets PG19** but runs clean on PG13 and up, so CI covers
+both facts differently. PG 17, 18 and 19beta3 get the full combination
+matrix (3 majors × pgss on/off × seed empty/populated × aurora
+none/mocked = 24 cells). PG 13, 14, 15 and 16 get one leg each —
+`seed=populated`, pgss on, no Aurora mock — for 28 jobs total. PG19 has
+no GA tag on Docker Hub yet, hence `19beta3`.
 
-The range is narrower than `main`'s deliberately. The PG19 script reads
-catalog columns introduced across PG15-18 — `pg_parameter_acl`,
-`wal_buffers_full`, `parallel_workers_to_launch`, `generic_plan_calls` —
-and only its `extversion` gates keep those queries off older servers.
-The 17 and 18 legs are what exercise those gates; adding PG12-14 legs
-would mostly re-test the same gate logic against servers this branch was
-never meant to run on.
+The four extra legs exist because the README claims PG13-19 support, and
+a claim nothing re-checks is a claim that quietly stops being true. The
+script reads catalog objects introduced across PG14-18 — `pg_stat_wal`,
+`pg_parameter_acl`, `wal_buffers_full`, `parallel_workers_to_launch` —
+and only the `server_version_num` and `pg_stat_statements` capability
+gates keep those queries off older servers. Those gates are the thing
+under test, and one leg each reaches them: `seed=populated` with pgss
+installed is the combination that executes the gated queries. Running
+the full 8-cell matrix on all seven majors would be 56 jobs to re-test
+gate logic the single leg already covers.
+
+This range used to be narrower, and the reasoning used to be the
+opposite: before the gates existed, older majors were excluded because
+the script genuinely could not run there. Adding the gates is what made
+the legs worth having.
 
 | Branch | Strict target | What CI tests on PR |
 |---|---|---|
 | `main` | PG12 and older | PG12-PG18 |
-| this branch (`pg19`) | PG19 | PG17, PG18, PG19beta3 |
+| this branch (`pg19`) | PG19, degrades to PG13 | PG17/18/19beta3 full matrix + one leg each on PG13-16 |
 | `pg13`, `pg14`, … (separate) | The named major | Each branch maintains its own scoped matrix |
 
 The single-version pytest **`report` job** (the one rendered in the PR

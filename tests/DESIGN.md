@@ -281,8 +281,9 @@ For CI runs, these are uploaded as workflow artifacts named
   extensions observation won't fire in CI. That's fine — we don't treat
   it as required.
 - **PG versioning policy**: this branch targets PG19 per the project's
-  branch-per-major policy, so the matrix runs PG17, PG18 and PG19beta3 —
-  the target plus the two majors below it, which are what exercise the
-  `extversion` gates guarding PG15-18-only catalog columns. All three are
-  merge-blockers here; `main` (PG12-and-older) keeps its own wider,
-  advisory matrix.
+  branch-per-major policy, and degrades cleanly to PG13. The matrix runs
+  the full pgss × seed × aurora combination on PG17, PG18 and PG19beta3,
+  plus one leg each on PG13-16 to keep the `server_version_num` and
+  `pg_stat_statements` capability gates verified rather than merely
+  asserted in the README. All are merge-blockers here; `main`
+  (PG12-and-older) keeps its own wider, advisory matrix.

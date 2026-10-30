@@ -92,6 +92,23 @@ Detects indexes left mis-ordered by an operating-system collation change - most
 commonly an in-place RHEL 7 (glibc 2.17) to RHEL 8+ (glibc 2.28) upgrade, where
 sort order changed for most locales. Affected text indexes silently return
 incomplete results, and affected UNIQUE indexes may already hold duplicates.
+Names every affected index, ordered PRIMARY KEY and UNIQUE first, and prints
+the `REINDEX` statement for each. Works on PG13+.
+
+**A flagged index is not necessarily still broken.** PostgreSQL records the
+collation version on the collation, not on each index, so `REINDEX` does not
+clear the flag - an index already rebuilt against the new library keeps being
+listed until someone runs `ALTER COLLATION ... REFRESH VERSION`. Tell the
+section when the OS actually changed and it sorts them out:
+
+```bash
+psql ... -v collation_since=2026-01-15 -f pg_collector.sql
+```
+
+Each flagged index then reports **AT RISK** (file untouched since before that
+date, so it cannot have been rebuilt), **MAYBE SAFE** (written since, so
+confirm and refresh), or **probably not glibc** (the collation uses ICU or the
+builtin provider, where an OS glibc upgrade is not the explanation).
 
 <img src="img/collation_index_risk.png" alt="Collation / glibc index risk section">
 

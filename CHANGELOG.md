@@ -74,6 +74,19 @@ All notable changes to pg collector will be documented in this file.
     cache scan, and the Aurora Limitless single-shard call ratio.
     tests/lint/check_div_by_zero.py now fails the build on any new occurrence.
 
+17- The Collation / glibc index risk listing now reaches a verdict per index
+    instead of leaving the reader to interpret the evidence. A flagged index is
+    not necessarily still broken: it may have been rebuilt against the newer
+    library already, or its collation may not be glibc at all. New optional
+    parameter -v collation_since=<date the OS collation changed> supplies the
+    one fact the catalog cannot: when to measure "rebuilt since" against. Each
+    flagged index then reads AT RISK (file untouched since before that date, so
+    it cannot have been rebuilt), MAYBE SAFE (written since - confirm, then
+    REFRESH VERSION), probably not glibc (collation provider is icu or builtin,
+    so an OS glibc upgrade does not explain the mismatch and the provider's own
+    version changed), or unknown when the date was not supplied or pg_stat_file
+    is not executable by the caller.
+
 16- The Collation / glibc index risk section now carries evidence of when each
     index was last rebuilt, because a mismatch does not mean an index is still
     affected: PostgreSQL records the collation version on the collation, not on

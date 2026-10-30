@@ -182,6 +182,8 @@ FRAGMENT_VARS = {
     "pgss_walbuffers_col": ("", ", wal_buffers_full"),
     "qid":                ("query_id", "NULL::bigint AS query_id"),
     "idx_mtime_col":      ("", ", (pg_stat_file(pg_relation_filepath(ic.oid))).modification AS index_file_mtime"),
+    "idx_mtime_expr":     ("NULL::timestamptz", "(pg_stat_file(pg_relation_filepath(ic.oid))).modification"),
+    "since_expr":         ("NULL::timestamptz", "'2026-01-15'::timestamptz"),
 }
 
 FRAGMENT_RE = re.compile(

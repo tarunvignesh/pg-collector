@@ -104,6 +104,10 @@ SELECT CASE WHEN :'help' = ':help' THEN 'f' ELSE :'help' END AS "help" \gset
 \echo ''
 \echo 'Tuning:'
 \echo '  part_min_gb     - Partitioning candidate size threshold in GB (default: 50)'
+\echo '  collation_since - Date the OS collation library changed, e.g. the day of'
+\echo '                    the RHEL 7 to RHEL 8 move. Lets the collation section'
+\echo '                    say which flagged indexes were rebuilt after it and'
+\echo '                    may already be safe. Example: -v collation_since=2026-01-15'
 \echo ''
 \echo 'Usage:'
 \echo '  psql -v fullmod=f -v vacuum=t -v replication=t -f pg_collector.sql'
@@ -196,9 +200,22 @@ SELECT has_function_privilege(current_user,
 
 \if :v_statfile
 \set idx_mtime_col ', (pg_stat_file(pg_relation_filepath(ic.oid))).modification AS index_file_mtime'
+\set idx_mtime_expr '(pg_stat_file(pg_relation_filepath(ic.oid))).modification'
 \else
 \set idx_mtime_col ''
+\set idx_mtime_expr 'NULL::timestamptz'
 \endif
+
+-- Optional: -v collation_since='2026-01-15' tells the collation section when
+-- the operating system collation actually changed -- the day of the OS
+-- upgrade, or of the move to the new image. Without it the section can show
+-- the evidence but cannot reach a verdict, because "rebuilt since" has no
+-- "since" to measure against.
+\set collation_since :collation_since
+SELECT CASE WHEN :'collation_since' = ':collation_since'
+            THEN 'NULL::timestamptz'
+            ELSE quote_literal(:'collation_since') || '::timestamptz'
+       END AS since_expr \gset
 -- Resolve fullmod: default 't' (full mode) if not passed
 \set fullmod :fullmod
 SELECT CASE WHEN :'fullmod' = ':fullmod' THEN 't' ELSE :'fullmod' END AS "fullmod" \gset
@@ -5904,7 +5921,8 @@ coll_state AS (
     SELECT c.oid AS colloid,
            n.nspname || '.' || c.collname AS collation_name,
            c.collversion AS recorded_version,
-           pg_collation_actual_version(c.oid) AS os_version
+           pg_collation_actual_version(c.oid) AS os_version,
+           c.collprovider AS provider
       FROM pg_collation c
       JOIN pg_namespace n ON n.oid = c.collnamespace
      WHERE c.collversion IS NOT NULL
@@ -5930,6 +5948,20 @@ SELECT DISTINCT
        coalesce(cs.collation_name, 'database default')  AS affected_collation,
        coalesce(cs.recorded_version, db.recorded_version) AS recorded_version,
        coalesce(cs.os_version, db.os_version)           AS os_version,
+       CASE
+         WHEN cs.provider IS NOT NULL AND cs.provider <> 'c'
+              THEN 'probably not glibc - collation provider is ' ||
+                   CASE cs.provider WHEN 'i' THEN 'icu' WHEN 'b' THEN 'builtin'
+                                    ELSE cs.provider::text END ||
+                   ', so an OS glibc upgrade does not explain this; the provider''s own version changed'
+         WHEN :since_expr IS NULL
+              THEN 'unknown - re-run with -v collation_since=<date the OS collation changed> to classify'
+         WHEN :idx_mtime_expr IS NULL
+              THEN 'unknown - no file mtime (needs EXECUTE on pg_stat_file); compare index_filenode instead'
+         WHEN :idx_mtime_expr >= :since_expr
+              THEN 'MAYBE SAFE - index file written after that date, so it may already have been rebuilt against the new library; confirm, then REFRESH VERSION'
+         ELSE 'AT RISK - index file untouched since before that date, so it cannot have been rebuilt'
+       END                                              AS assessment,
        pg_size_pretty(pg_relation_size(i.indexrelid))   AS index_size,
        ic.relfilenode                                   AS index_filenode
        :idx_mtime_col
@@ -5954,7 +5986,8 @@ WITH coll_state AS (
     SELECT c.oid AS colloid,
            n.nspname || '.' || c.collname AS collation_name,
            c.collversion AS recorded_version,
-           pg_collation_actual_version(c.oid) AS os_version
+           pg_collation_actual_version(c.oid) AS os_version,
+           c.collprovider AS provider
       FROM pg_collation c
       JOIN pg_namespace n ON n.oid = c.collnamespace
      WHERE c.collversion IS NOT NULL
@@ -5973,6 +6006,20 @@ SELECT DISTINCT
        cs.collation_name                                AS affected_collation,
        cs.recorded_version                              AS recorded_version,
        cs.os_version                                    AS os_version,
+       CASE
+         WHEN cs.provider IS NOT NULL AND cs.provider <> 'c'
+              THEN 'probably not glibc - collation provider is ' ||
+                   CASE cs.provider WHEN 'i' THEN 'icu' WHEN 'b' THEN 'builtin'
+                                    ELSE cs.provider::text END ||
+                   ', so an OS glibc upgrade does not explain this; the provider''s own version changed'
+         WHEN :since_expr IS NULL
+              THEN 'unknown - re-run with -v collation_since=<date the OS collation changed> to classify'
+         WHEN :idx_mtime_expr IS NULL
+              THEN 'unknown - no file mtime (needs EXECUTE on pg_stat_file); compare index_filenode instead'
+         WHEN :idx_mtime_expr >= :since_expr
+              THEN 'MAYBE SAFE - index file written after that date, so it may already have been rebuilt against the new library; confirm, then REFRESH VERSION'
+         ELSE 'AT RISK - index file untouched since before that date, so it cannot have been rebuilt'
+       END                                              AS assessment,
        pg_size_pretty(pg_relation_size(i.indexrelid))   AS index_size,
        ic.relfilenode                                   AS index_filenode
        :idx_mtime_col
